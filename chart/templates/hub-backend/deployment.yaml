@@ -55,8 +55,12 @@ spec:
         - name: wait-postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           securityContext:
-            runAsNonRoot: false
-            runAsUser: 0
+            runAsUser: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           command:
             - sh
             - -c

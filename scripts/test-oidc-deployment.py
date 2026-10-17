@@ -148,6 +148,15 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('name: OIDC_AUDIENCE\n              value: "app"', rendered)
         self.assertIn('name: PGHOST\n              value: "external-rw"', rendered)
         self.assertIn('name: PGPORT\n              value: "5433"', rendered)
+        wait_postgres = rendered.split("        - name: wait-postgres\n", 1)[1].split("      containers:\n", 1)[0]
+        for setting in (
+            "runAsUser: 65532",
+            "runAsNonRoot: true",
+            "allowPrivilegeEscalation: false",
+            "drop:\n                - ALL",
+        ):
+            self.assertIn(setting, wait_postgres)
+        self.assertNotIn("runAsUser: 0", wait_postgres)
         self.assertIn('value: "openid profile email offline_access"', rendered)
         self.assertNotIn('urn:zitadel:', rendered)
         result = subprocess.run(args + ["--set", "auth.oidcClientId="], cwd=ROOT, capture_output=True)
