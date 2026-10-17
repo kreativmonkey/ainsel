@@ -6,8 +6,9 @@
 # Build:
 #   docker build --build-arg BASE_TAG=main -t ainsel/ainsel-pi:go -f pi/Dockerfile.go pi/
 
+ARG BASE_IMAGE=dpinsel/ainsel-pi
 ARG BASE_TAG=latest
-FROM dpinsel/ainsel-pi:${BASE_TAG}
+FROM ${BASE_IMAGE}:${BASE_TAG}
 
 USER root
 

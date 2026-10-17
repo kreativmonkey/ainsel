@@ -77,9 +77,9 @@ Each variant extends the base `ainsel-pi` image, built in the same run.
 
 | Image | Dockerfile | What's added |
 | --- | ---------- | ------------ |
-| `dpinsel/ainsel-pi:dev` / `:<sha>` | `Dockerfile` | Base image (Node.js + pi + system tools) |
-| `dpinsel/ainsel-pi-go:1.24` | `Dockerfile.go` | Go 1.24 + golangci-lint |
-| `dpinsel/ainsel-pi-maui:8.0` | `Dockerfile.maui` | .NET 8 SDK + Android SDK + MAUI Android workload |
+| `ghcr.io/<repository-owner>/ainsel-pi:dev` / `:<sha>` | `Dockerfile` | Base image (Node.js + pi + system tools) |
+| `ghcr.io/<repository-owner>/ainsel-pi-go:1.24` | `Dockerfile.go` | Go 1.24 + golangci-lint |
+| `ghcr.io/<repository-owner>/ainsel-pi-maui:8.0` | `Dockerfile.maui` | .NET 8 SDK + Android SDK + MAUI Android workload |
 
 Variants publish **only** their floating tag. They used to publish a
 `1.24-<sha>` / `8.0-<sha>` tag per build too, but nothing ever pulled a variant by
@@ -95,7 +95,7 @@ run (`BASE_TAG=<sha>`), never on whatever `:dev` happens to point at.
 3. Keep `USER agent` at the end so the runtime stays non-root.
 4. Add a corresponding build-push step in the pi CI workflows,
    pushing to a new repository
-   (`dpinsel/ainsel-pi-<variant>:<version>`). Publish the floating tag only,
+   (`ghcr.io/<repository-owner>/ainsel-pi-<variant>:<version>`). Publish the floating tag only,
    on main - see the variant note above.
 5. Update the table above.
 

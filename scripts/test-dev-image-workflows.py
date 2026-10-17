@@ -28,6 +28,16 @@ import yaml
 
 SHA = "0ae751bc1234567890"
 WORKFLOWS = Path(".github/workflows")
+EXPECTED_IMAGES = {
+    "dev-image-frontend.yml": "ainsel-hub-frontend",
+    "dev-image-operators-agent.yml": "ainsel-k8s-ai-agent-operator",
+    "dev-image-operators-event-gateway.yml": "ainsel-k8s-event-source-gateway-operator",
+    "dev-image-pi.yml": "ainsel-pi",
+    "dev-image-services-chat-mcp.yml": "ainsel-chat-mcp",
+    "dev-image-services-hub.yml": "ainsel-hub-backend",
+    "dev-image-services-mcp.yml": "ainsel-mcp",
+    "dev-image-services-webhook-receiver.yml": "ainsel-webhook-receiver",
+}
 
 # event name, GITHUB_REF, the `publish` dispatch input, expected decision
 CASES = [
@@ -80,6 +90,7 @@ def run_meta_step(step: dict, event: str, ref: str, publish_input: str) -> dict[
             os.environ,
             GITHUB_EVENT_NAME=event,
             GITHUB_SHA=SHA,
+            GITHUB_REPOSITORY_OWNER="Ainsel-Project",
             GITHUB_REF=ref,
             GITHUB_OUTPUT=handle.name,
         )
@@ -95,11 +106,35 @@ def check_workflow(path: Path) -> list[str]:
     meta = next((s for s in steps if s.get("name") == "Compute image metadata"), None)
     if meta is None:
         return [f"{path.name}: no `Compute image metadata` step to gate on"]
-    login = next((s for s in steps if s.get("name") == "Login to Docker Hub"), None)
+    login = next((s for s in steps if s.get("name") == "Login to GHCR"), None)
     if login is None:
-        return [f"{path.name}: no `Login to Docker Hub` step?"]
+        return [f"{path.name}: no `Login to GHCR` step"]
     if login.get("if") != "steps.meta.outputs.publish == 'true'":
         problems.append(f"login is guarded by {login.get('if')!r}, not by the publish output")
+    login_with = login.get("with") or {}
+    if login_with.get("registry") != "ghcr.io":
+        problems.append(f"login registry is {login_with.get('registry')!r}, not 'ghcr.io'")
+    if login_with.get("username") != "${{ github.actor }}":
+        problems.append("GHCR login does not use github.actor")
+    if login_with.get("password") != "${{ secrets.GITHUB_TOKEN }}":
+        problems.append("GHCR login does not use GITHUB_TOKEN")
+
+    permissions = doc.get("permissions") or {}
+    if permissions.get("contents") != "read" or permissions.get("packages") != "write":
+        problems.append(f"permissions are {permissions!r}, want contents:read and packages:write")
+    triggers = doc.get("on", doc.get(True, {})) or {}
+    push_trigger = triggers.get("push") or {}
+    if "main" not in (push_trigger.get("branches") or []):
+        problems.append("push trigger no longer targets main")
+    if not push_trigger.get("paths"):
+        problems.append("push trigger lost its path filters")
+    publish_input = ((triggers.get("workflow_dispatch") or {}).get("inputs") or {}).get("publish") or {}
+    if publish_input.get("type") != "boolean" or publish_input.get("default") is not False:
+        problems.append("workflow_dispatch publish must remain an opt-in boolean")
+    if "tr '[:upper:]' '[:lower:]'" not in meta.get("run", ""):
+        problems.append("metadata step does not lowercase GITHUB_REPOSITORY_OWNER")
+    if "GITHUB_REPOSITORY_OWNER" not in meta.get("run", ""):
+        problems.append("metadata step does not derive image namespace from repository owner")
 
     builds = [s for s in steps if "build-push-action" in str(s.get("uses", ""))]
     if not builds:
@@ -117,6 +152,19 @@ def check_workflow(path: Path) -> list[str]:
 
     for event, ref, publish_input, want in CASES:
         got = run_meta_step(meta, event, ref, publish_input)
+        prefix = "ghcr.io/ainsel-project/"
+        expected_names = [EXPECTED_IMAGES[path.name]]
+        if path.name == "dev-image-pi.yml":
+            expected_names += ["ainsel-pi-go", "ainsel-pi-maui"]
+        for key in ("tags", "go_tags", "maui_tags"):
+            if key in got:
+                for tag in got[key].splitlines():
+                    if not tag.startswith(prefix):
+                        problems.append(f"{event} on {ref}: {key} uses non-GHCR or non-lowercase-owner tag {tag!r}")
+                    if not any(tag.startswith(f"{prefix}{name}:") for name in expected_names):
+                        problems.append(f"{event} on {ref}: {key} changed image basename: {tag!r}")
+        if "base_image" in got and got["base_image"] != f"{prefix}ainsel-pi":
+            problems.append(f"{event} on {ref}: base_image changed to {got['base_image']!r}")
         if got.get("publish") != want:
             problems.append(
                 f"{event} on {ref} (publish input {publish_input or '(unset)'}) "
@@ -163,7 +211,7 @@ def check_pi_variants(got: dict[str, str], ref: str, seen: list[str]) -> list[st
             "~3 GB of provenance nothing pulls, and 88 GB of the registry"
         )
     published = got.get("publish_variants") == "true"
-    floats = {"dpinsel/ainsel-pi-go:1.24", "dpinsel/ainsel-pi-maui:8.0"}
+    floats = {"ghcr.io/ainsel-project/ainsel-pi-go:1.24", "ghcr.io/ainsel-project/ainsel-pi-maui:8.0"}
     if published and set(variants.splitlines()) != floats:
         problems.append(f"{ref}: publish_variants=true but tags are {variants!r}")
     if not published and "local-check" not in variants:
@@ -191,11 +239,15 @@ def check_pi_workflow() -> list[str]:
                 "publish the variants; whether to push is decided by publish_variants"
             )
         args = str((step.get("with") or {}).get("build-args"))
-        if "BASE_TAG=${{ steps.meta.outputs.base_tag }}" not in args:
-            problems.append(
-                f"{name}: build-args={args!r} - the base must come from the same step "
-                "that decides whether it was published, not a hardcoded tag"
-            )
+        for required in (
+            "BASE_IMAGE=${{ steps.meta.outputs.base_image }}",
+            "BASE_TAG=${{ steps.meta.outputs.base_tag }}",
+        ):
+            if required not in args:
+                problems.append(
+                    f"{name}: build-args={args!r} - {required!r} must come from "
+                    "the metadata step"
+                )
     return problems
 
 
