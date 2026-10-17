@@ -72,8 +72,18 @@ spec:
             {{- end }}
             - name: OIDC_ISSUER
               value: {{ .Values.auth.oidcIssuer | quote }}
-            - name: OIDC_PROJECT_ID
-              value: {{ .Values.auth.oidcProjectId | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ .Values.auth.oidcAudience | default .Values.auth.oidcProjectId | default .Values.auth.oidcClientId | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidcClientId | quote }}
+            - name: OIDC_ROLES_CLAIM
+              value: {{ .Values.auth.oidcRolesClaim | quote }}
+            - name: OIDC_SCOPES
+              value: {{ include "ainsel.oidcScopes" . | quote }}
+            {{- if .Values.mcp.externalUrl }}
+            - name: MCP_RESOURCE_URL
+              value: {{ .Values.mcp.externalUrl | quote }}
+            {{- end }}
             {{- if .Values.auth.internalValidateSecret }}
             - name: INTERNAL_VALIDATE_SECRET
               value: {{ .Values.auth.internalValidateSecret | quote }}

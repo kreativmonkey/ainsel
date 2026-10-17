@@ -16,8 +16,8 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.OIDCIssuer != "https://auth.test" {
 		t.Errorf("OIDCIssuer = %q; want https://auth.test", cfg.OIDCIssuer)
 	}
-	if cfg.OIDCProjectID != "proj-123" {
-		t.Errorf("OIDCProjectID = %q; want proj-123", cfg.OIDCProjectID)
+	if cfg.OIDCAudience != "proj-123" {
+		t.Errorf("OIDCAudience = %q; want proj-123", cfg.OIDCAudience)
 	}
 	if cfg.HubURL != "http://hub-backend.test:8080" {
 		t.Errorf("HubURL = %q; want http://hub-backend.test:8080", cfg.HubURL)
@@ -31,13 +31,13 @@ func TestValidateRequiresOIDCFields(t *testing.T) {
 		wantErr string
 	}{
 		{"missing issuer", func(c *config.Config) { c.OIDCIssuer = "" }, "OIDC_ISSUER"},
-		{"missing project", func(c *config.Config) { c.OIDCProjectID = "" }, "OIDC_PROJECT_ID"},
+		{"missing project", func(c *config.Config) { c.OIDCAudience = "" }, "OIDC_AUDIENCE"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
-				OIDCIssuer:    "x",
-				OIDCProjectID: "y",
+				OIDCIssuer:   "x",
+				OIDCAudience: "y",
 			}
 			tc.mutate(&cfg)
 			err := cfg.Validate()

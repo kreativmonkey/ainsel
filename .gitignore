@@ -33,3 +33,6 @@ package-lock.json
 # Python bytecode (scripts/*.py are run and sometimes imported in tests)
 __pycache__/
 *.py[cod]
+
+# Nix/direnv local environment
+.direnv/

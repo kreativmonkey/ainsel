@@ -14,9 +14,11 @@ import (
 // (RFC 8414 / OpenID Connect Discovery 1.0) that the middleware needs to
 // locate the issuer's endpoints.
 type Discovery struct {
-	Issuer           string `json:"issuer"`
-	JWKSURI          string `json:"jwks_uri"`
-	UserInfoEndpoint string `json:"userinfo_endpoint"`
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
+	UserInfoEndpoint      string `json:"userinfo_endpoint"`
 }
 
 // FetchDiscovery retrieves and parses the OIDC discovery document at

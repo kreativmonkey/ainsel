@@ -4,7 +4,8 @@ type AinselConfig = {
   authMode?: AuthMode
   oidcIssuer: string
   oidcClientId: string
-  oidcProjectId: string
+  oidcProjectId?: string
+  oidcScopes?: string
   forgejoApiBase?: string
   forgejoRepo?: string
 }
@@ -21,9 +22,9 @@ declare global {
 // auth mode:
 //   - explicit authMode from the deployment wins ('local' and 'none' need no
 //     OIDC fields),
-//   - otherwise a complete OIDC triple means 'oidc',
+//   - otherwise issuer and client ID means 'oidc',
 //   - all-empty OIDC fields mean 'none' (port-forward / edge-proxy installs),
-//   - a *partially* filled OIDC triple is a broken deploy and throws.
+//   - a *partially* filled OIDC configuration is a broken deploy and throws.
 export function runtimeConfig(): ResolvedConfig {
   const c = window.__AINSEL_CONFIG__
   if (!c) {
@@ -39,10 +40,10 @@ export function runtimeConfig(): ResolvedConfig {
   const { oidcIssuer, oidcClientId, oidcProjectId } = c
   const allEmpty = !oidcIssuer && !oidcClientId && !oidcProjectId
   if (c.authMode === 'oidc' || !allEmpty) {
-    if (!oidcIssuer || !oidcClientId || !oidcProjectId) {
+    if (!oidcIssuer || !oidcClientId) {
       throw new Error(
         "runtime-config.js incomplete: " +
-          "window.__AINSEL_CONFIG__ must have oidcIssuer, oidcClientId, and oidcProjectId",
+          "window.__AINSEL_CONFIG__ must have oidcIssuer and oidcClientId",
       )
     }
     return { ...c, authMode: 'oidc' }

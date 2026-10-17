@@ -23,9 +23,9 @@ func TestNewMiddlewareRejectsMissingToken_AddsWWWAuthenticate(t *testing.T) {
 	t.Cleanup(jwksServer.Close)
 
 	mw, err := auth.NewMiddleware(auth.Config{
-		Issuer:    jwksServer.URL,
-		ProjectID: "proj-123",
-		JWKSURL:   jwksServer.URL + "/keys",
+		Issuer:   jwksServer.URL,
+		Audience: "proj-123",
+		JWKSURL:  jwksServer.URL + "/keys",
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)
@@ -55,8 +55,8 @@ func TestNewMiddlewareRejectsEmptyJWKSURL(t *testing.T) {
 	// No legacy fallback: an empty JWKSURL must error instead of silently
 	// constructing the legacy Zitadel path from the issuer.
 	_, err := auth.NewMiddleware(auth.Config{
-		Issuer:    "https://idp.example.com",
-		ProjectID: "proj-123",
+		Issuer:   "https://idp.example.com",
+		Audience: "proj-123",
 	})
 	if err == nil {
 		t.Fatal("expected error for empty JWKSURL")

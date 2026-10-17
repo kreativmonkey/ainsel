@@ -16,6 +16,8 @@ type MockUser = {
   profile: { sub?: unknown; preferred_username?: string; email?: string }
 }
 
+let providerProps: Record<string, unknown>
+
 let mockOidc: {
   user: MockUser | null
   isLoading: boolean
@@ -26,7 +28,7 @@ let mockOidc: {
 }
 
 vi.mock('react-oidc-context', () => ({
-  AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  AuthProvider: ({ children, ...props }: { children: ReactNode }) => { providerProps = props; return <>{children}</> },
   useAuth: () => mockOidc,
 }))
 
@@ -197,5 +199,26 @@ describe('AuthProvider (local mode)', () => {
     expect(localStorage.getItem('ainsel.local.token')).toBeNull()
     rerender()
     expect(result.current.token).toBeNull()
+  })
+})
+
+describe('OIDC provider configuration', () => {
+  it('uses standard scopes without a vendor project ID', () => {
+    seedConfig({ authMode: 'oidc', oidcIssuer: 'https://idp.test/application/o/app/', oidcClientId: 'app' })
+    render(<Wrapper><span /></Wrapper>)
+    expect(providerProps.scope).toBe('openid profile email offline_access')
+    expect(providerProps.authority).toBe('https://idp.test/application/o/app/')
+  })
+
+  it('uses explicitly configured provider scopes', () => {
+    seedConfig({ ...OIDC_CFG, oidcScopes: 'openid email custom:audience' })
+    render(<Wrapper><span /></Wrapper>)
+    expect(providerProps.scope).toBe('openid email custom:audience')
+  })
+
+  it('keeps legacy project scopes when explicitly supplied', () => {
+    seedConfig(OIDC_CFG)
+    render(<Wrapper><span /></Wrapper>)
+    expect(providerProps.scope).toBe('openid profile email urn:zitadel:iam:org:project:id:test-project:aud')
   })
 })

@@ -143,7 +143,9 @@ function oidcProviderConfig(cfg: ResolvedConfig) {
     redirect_uri: `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/auth/callback`,
     post_logout_redirect_uri: `${window.location.origin}${import.meta.env.BASE_URL}`,
     response_type: 'code',
-    scope: `openid profile email urn:zitadel:iam:org:project:id:${cfg.oidcProjectId}:aud`,
+    scope: cfg.oidcScopes || (cfg.oidcProjectId
+      ? `openid profile email urn:zitadel:iam:org:project:id:${cfg.oidcProjectId}:aud`
+      : 'openid profile email offline_access'),
     loadUserInfo: true,
     userStore: new WebStorageStateStore({ store: window.localStorage }),
     automaticSilentRenew: true,

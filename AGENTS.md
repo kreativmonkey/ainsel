@@ -26,6 +26,16 @@ Folder map (role -> path):
 | `pi/` | Pi-native agent runtime |
 | `docs/` | Architecture, CRDs, deployment, conventions |
 
+## Development environment
+
+`nix develop` provides the pinned toolchain; `just` lists setup, auth checks,
+all-module builds, chart validation, and deployment smoke tests. Run
+`just test-deployment` after changes to OIDC wiring, frontend proxy rules,
+external database configuration, or MCP discovery. It executes real nginx,
+the frontend startup script, the MCP binary, and Helm using temporary local
+services. OIDC role/group claims are informational; authorization remains
+owned by the hub database.
+
 ## First time in this repo?
 
 Run [`.agent/skills/development/project-setup.md`](.agent/skills/development/project-setup.md)

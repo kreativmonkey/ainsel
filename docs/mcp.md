@@ -60,12 +60,12 @@ Add the server to your Claude Code MCP configuration (project
 }
 ```
 
-Claude Code performs OAuth Dynamic Client Registration against the
-server's `/.well-known/openid-configuration` and runs a PKCE
-authorization-code flow with the configured OIDC provider. After a
-one-time browser login you get a short-lived token that is refreshed
-automatically. No static token to manage. See
-[Auth](#authentication) below for what the server does under the hood.
+The endpoint accepts an OIDC access token or an `ainsel_` personal token.
+Configure the client's bearer-token header, or configure a pre-registered
+public client at your IdP when the tool supports interactive OAuth. With
+`mcp.externalUrl` set, RFC 9728 metadata advertises the real authorization
+server. OAuth client registration belongs to that provider: AInsel does not
+expose a synthetic Dynamic Client Registration endpoint.
 
 ### Claude Desktop
 
@@ -106,13 +106,13 @@ The `/mcp` endpoint is protected. Two token types are accepted:
 
 1. **OIDC access token (JWT).** The default path for interactive local
    agents. The server validates the JWT against the configured OIDC
-   issuer's JWKS and requires the Zitadel project ID in the `aud`
-   claim. This is what Claude Code and Claude Desktop obtain via the
-   OAuth flow. The server exposes a synthetic
-   `/.well-known/openid-configuration` and `/.well-known/oauth-authorization-server`
-   document plus a `/oauth/register` (DCR) endpoint that hands out a
-   pre-registered PKCE client id, so clients that follow RFC 8414 /
-   RFC 7591 (Claude Code among them) work with no extra wiring.
+   issuer's JWKS and requires `OIDC_AUDIENCE` in the `aud` claim.
+   Public clients use authorization-code flow with PKCE at the configured
+   provider. Set `mcp.externalUrl` to enable protected-resource metadata at
+   `/.well-known/oauth-protected-resource<resource-path>` (plus a root alias).
+   Expose that path through your ingress. The `401` bearer challenge links
+   to the metadata, whose `authorization_servers` contains the actual issuer.
+   Clients need preregistration or DCR support supplied by that provider.
 
 2. **`ainsel_` user token.** A long-lived personal token prefixed with
    `ainsel_`, issued from the operations console. The server forwards
@@ -128,10 +128,12 @@ Required server-side env vars (set by the Helm chart):
 
 | Var | Purpose |
 |-----|---------|
-| `OIDC_ISSUER` | OIDC issuer URL (e.g. your Zitadel) |
-| `OIDC_PROJECT_ID` | Project ID; required value in token `aud` |
-| `OIDC_CLIENT_ID` | Pre-registered PKCE client id returned by DCR |
-| `MCP_RESOURCE_URL` | Externally-reachable server URL, used as the synthetic issuer |
+| `OIDC_ISSUER` | Exact OIDC issuer URL from provider discovery |
+| `OIDC_AUDIENCE` | Required token audience; falls back to legacy `OIDC_PROJECT_ID`, then `OIDC_CLIENT_ID` |
+| `OIDC_CLIENT_ID` | Public client ID; default audience when no audience/project ID is set |
+| `OIDC_SCOPES` | Space-separated scopes advertised to MCP clients |
+| `OIDC_ROLES_CLAIM` | Optional JWT role/group claim; informational, not hub permissions |
+| `MCP_RESOURCE_URL` | Public MCP URL; enables RFC 9728 metadata and bearer challenge link |
 | `INTERNAL_VALIDATE_SECRET` | Shared secret with the hub for `ainsel_` token validation |
 
 ## What you can do with the agent
@@ -366,7 +368,7 @@ make build
 
 PORT=8080 \
 OIDC_ISSUER=https://oidc.example.com \
-OIDC_PROJECT_ID=<your-project-id> \
+OIDC_AUDIENCE=<your-token-audience> \
 OIDC_CLIENT_ID=<your-pkce-client-id> \
 MCP_RESOURCE_URL=http://localhost:8080 \
 HUB_URL=http://localhost:8080 \

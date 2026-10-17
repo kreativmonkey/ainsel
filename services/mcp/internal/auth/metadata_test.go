@@ -13,7 +13,7 @@ func TestProtectedResourceMetadataHandler(t *testing.T) {
 	h, err := auth.ProtectedResourceMetadataHandler(auth.MetadataConfig{
 		ResourceURL: "https://mcp.test/ainsel-dev/mcp",
 		Issuer:      "https://auth.test",
-		ProjectID:   "proj-123",
+		Scopes:      "openid profile email offline_access custom-scope",
 	})
 	if err != nil {
 		t.Fatalf("ProtectedResourceMetadataHandler: %v", err)
@@ -42,12 +42,11 @@ func TestProtectedResourceMetadataHandler(t *testing.T) {
 	if body.Resource != "https://mcp.test/ainsel-dev/mcp" {
 		t.Errorf("resource = %q; want https://mcp.test/ainsel-dev/mcp", body.Resource)
 	}
-	// authorization_servers points at the MCP server itself (the OAuth proxy),
-	// not directly at Zitadel, so Claude Code discovers the registration_endpoint.
-	if len(body.AuthorizationServers) != 1 || body.AuthorizationServers[0] != "https://mcp.test/ainsel-dev/mcp" {
-		t.Errorf("authorization_servers = %v; want [https://mcp.test/ainsel-dev/mcp]", body.AuthorizationServers)
+	// Clients discover the actual configured provider, without a vendor-specific proxy.
+	if len(body.AuthorizationServers) != 1 || body.AuthorizationServers[0] != "https://auth.test" {
+		t.Errorf("authorization_servers = %v; want [https://auth.test]", body.AuthorizationServers)
 	}
-	wantScope := "urn:zitadel:iam:org:project:id:proj-123:aud"
+	wantScope := "custom-scope"
 	found := false
 	for _, s := range body.ScopesSupported {
 		if s == wantScope {

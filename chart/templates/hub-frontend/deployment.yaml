@@ -75,6 +75,8 @@ spec:
             - name: OIDC_CLIENT_ID
               value: {{ .Values.auth.oidcClientId | quote }}
             {{- end }}
+            - name: OIDC_SCOPES
+              value: {{ include "ainsel.oidcScopes" . | quote }}
             {{- if .Values.auth.oidcProjectId }}
             - name: OIDC_PROJECT_ID
               value: {{ .Values.auth.oidcProjectId | quote }}

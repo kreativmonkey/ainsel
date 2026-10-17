@@ -207,14 +207,29 @@ either is unset, no sidecar is added.
 | `chatMCP.image.repository` | string | `dpinsel/ainsel-chat-mcp` | Sidecar image repository |
 | `chatMCP.image.tag` | string | `"0.1.0"` | Sidecar image tag |
 
+### External database and MCP discovery
+
+`postgres.host` (empty by default) and `postgres.port` (`5432`) configure the
+hub's readiness init container. With `postgres.enabled: false`, point both
+these settings and the existing secret's `dsn` at the external server. The
+secret also needs `username` and `database` keys.
+
+`mcp.externalUrl` (empty by default) enables RFC 9728 discovery for the public
+MCP endpoint. Expose `/.well-known/oauth-protected-resource<resource-path>`
+through your ingress. Metadata points at the configured OIDC provider;
+client registration is handled there.
+
 ### Auth
 
 | Value | Type | Default | Description |
 |-------|------|---------|-------------|
-| `auth.mode` | string | `""` | Authentication mode: `oidc` (external OIDC provider — requires `oidcIssuer`/`clientId`/`projectId`), `local` (hub-managed username/password accounts, admin bootstrapped from a chart Secret — see `auth.local`), `none` (no authentication; only safe port-forwarded or behind an edge auth proxy such as Authelia/Authentik/oauth2-proxy). Empty keeps the legacy behavior: OIDC when `oidcIssuer` is configured, otherwise the chart's local-mode detection auto-enables no-auth when nothing is exposed via ingress |
+| `auth.mode` | string | `""` | Authentication mode: `oidc` (external OIDC provider — requires `oidcIssuer`/`oidcClientId`), `local` (hub-managed username/password accounts, admin bootstrapped from a chart Secret — see `auth.local`), `none` (no authentication; only safe port-forwarded or behind an edge auth proxy such as Authelia/Authentik/oauth2-proxy). Empty keeps the legacy behavior: OIDC when `oidcIssuer` is configured, otherwise the chart's local-mode detection auto-enables no-auth when nothing is exposed via ingress |
 | `auth.oidcIssuer` | string | `""` | OIDC issuer URL |
 | `auth.oidcClientId` | string | `""` | OIDC client id |
-| `auth.oidcProjectId` | string | `""` | OIDC project id (required with `mode: oidc`) |
+| `auth.oidcAudience` | string | `""` | Expected JWT audience; defaults to legacy project ID, then client ID |
+| `auth.oidcScopes` | string | `""` | Space-separated scopes; standard default `openid profile email offline_access`, or explicit legacy project scope |
+| `auth.oidcRolesClaim` | string | `""` | Optional JWT role/group claim. Informational; hub DB manages permissions |
+| `auth.oidcProjectId` | string | `""` | Optional legacy Zitadel project audience/scope compatibility |
 | `auth.allowInsecureNoAuth` | bool | `false` | Run the hub backend **without** auth middleware (`HUB_ALLOW_INSECURE_NO_AUTH=true`). Only effective when `oidcIssuer` is empty. For local/air-gapped testing ONLY: every `/api/v1/*` endpoint becomes open to any caller. Never enable on a reachable host without an external auth proxy in front of the ingress. You normally do not need to set this by hand: when no ingress is enabled anywhere (hub/ui/mcp) and no OIDC issuer is set, the chart detects "local mode" and enables it automatically (see `values-quickstart.yaml`) |
 | `auth.internalValidateSecret` | string | `""` | Shared secret between hub-backend and the MCP service protecting the `/api/internal/user-tokens/validate` endpoint. When unset, user-token auth is disabled and OIDC remains the only MCP auth |
 | `auth.skillsMcpToken` | string | `""` | Bearer token for the read-only skill catalogue MCP (`/api/internal/skills/mcp`, in-cluster). Agents get it as a normal secret env entry on their AgentImage and reference it from `spec.mcpServers[].tokenFromEnv`. Deliberately separate from `internalValidateSecret`: that one is the cluster-wide internal credential and must not become a bearer token for a second endpoint. Unset leaves the catalogue endpoint answering 503 — opt-in per instance |

@@ -32,7 +32,8 @@ type User struct {
 // Config configures the JWT middleware.
 type Config struct {
 	Issuer          string        // OIDC issuer URL (matches `iss` claim)
-	Audience        string        // OIDC client ID, expected in `aud`
+	Audience        string        // Expected token audience (`aud`)
+	RolesClaim      string        // Optional claim name; defaults to roles, then the legacy Zitadel claim
 	JWKSURL         string        // JWKS endpoint (from OIDC discovery; required)
 	UserInfoURL     string        // Optional: userinfo endpoint for enriched claims
 	RefreshEvery    time.Duration // JWKS refresh; defaults to 1h if zero
@@ -168,7 +169,7 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 				return
 			}
 
-			u := userFromClaims(claims)
+			u := userFromClaims(claims, cfg.RolesClaim)
 
 			// If userinfo URL is configured, enrich user data from userinfo endpoint.
 			// This gets claims like preferred_username that aren't in the JWT.
@@ -357,7 +358,7 @@ func bearerToken(header string) (string, bool) {
 	return tok, true
 }
 
-func userFromClaims(c jwt.MapClaims) *User {
+func userFromClaims(c jwt.MapClaims, rolesClaim string) *User {
 	sub := stringClaim(c, "sub")
 	// Note: preferred_username may not be in the JWT (depends on provider config).
 	// If UserInfoURL is configured, we'll enrich this via userinfo endpoint.
@@ -370,8 +371,20 @@ func userFromClaims(c jwt.MapClaims) *User {
 		Email:    firstStringClaim(c, "email"),
 		Username: username,
 	}
-	if raw, ok := c[zitadelRolesClaim].(map[string]any); ok {
-		u.Roles = make([]string, 0, len(raw))
+	if rolesClaim == "" {
+		rolesClaim = "roles"
+		if _, ok := c[rolesClaim]; !ok {
+			rolesClaim = zitadelRolesClaim // Backward compatibility only.
+		}
+	}
+	switch raw := c[rolesClaim].(type) {
+	case []any:
+		for _, value := range raw {
+			if role, ok := value.(string); ok {
+				u.Roles = append(u.Roles, role)
+			}
+		}
+	case map[string]any:
 		for role := range raw {
 			u.Roles = append(u.Roles, role)
 		}

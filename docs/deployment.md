@@ -8,7 +8,7 @@
 - Forgejo instance
 - kubectl with cluster access
 
-**PostgreSQL:** The chart bundles a PostgreSQL instance by default (`postgres.enabled: true` in `values.yaml`) — it backs the event queue, triggers, chat sessions, and all other hub state. The hub connects using the `HUB_DB_URL` secret (`ainsel-hub-db`). You do **not** need to deploy PostgreSQL separately; to use an external server, set `postgres.enabled: false` and provide your own secret with a `dsn` key (`postgres.auth.existingSecret`).
+**PostgreSQL:** The chart bundles a PostgreSQL instance by default (`postgres.enabled: true` in `values.yaml`) — it backs the event queue, triggers, chat sessions, and all other hub state. The hub connects using the `HUB_DB_URL` secret (`ainsel-hub-db`). You do **not** need to deploy PostgreSQL separately; to use an external server, set `postgres.enabled: false` and provide your own secret with a `username`, `database`, and `dsn` keys (`postgres.auth.existingSecret`), and configure `postgres.host` / `postgres.port` for the readiness check.
 
 ## Step 1: Building Images
 
@@ -56,7 +56,18 @@ kubectl create secret generic ainsel-hub-db \
   -n <namespace>
 ```
 
-Then set `postgres.auth.existingSecret: ainsel-hub-db` in your `values.yaml`.
+Then configure the external host used by the readiness check and the existing secret:
+
+```yaml
+postgres:
+  enabled: false
+  host: postgres-rw.database.svc.cluster.local
+  port: 5432
+  auth:
+    existingSecret: ainsel-hub-db
+```
+
+The secret's `dsn` must point at the same server and database.
 
 ### Image pull secret (private registry)
 
@@ -159,12 +170,35 @@ auth:
   mode: oidc
   oidcIssuer: "https://your-oidc-provider.example.com"
   oidcClientId: "ainsel"
+  # Defaults to the client ID; set when the provider issues another aud claim.
+  oidcAudience: "ainsel"
+  oidcScopes: "openid profile email offline_access"
+  # Optional, informational role/group claim; does not grant hub permissions.
+  oidcRolesClaim: "groups"
 ```
 
 Any OIDC provider that exposes a standard discovery endpoint
 (`/.well-known/openid-configuration`) is supported — for example Zitadel,
-Keycloak, or Dex. The frontend reads the same values from the
+Authentik, Keycloak, or Dex. The frontend reads the same values from the
 chart-rendered `runtime-config.js` and uses them to drive the login flow.
+
+Register a **public** authorization-code client with PKCE (S256); the SPA
+cannot keep a client secret. Register `https://<host><basePath>/auth/callback`
+as the redirect URI and `https://<host><basePath>/` for logout. Preserve the
+issuer exactly as discovery reports it, including its trailing slash. JWT
+access tokens must use RS256 and include the configured audience. For
+Authentik, configure a signing key and the `offline_access` scope mapping
+when refresh tokens are wanted.
+
+`auth.oidcProjectId` is an optional legacy Zitadel compatibility setting. It
+supplies the audience and project scope only when explicitly set; other
+providers need no project ID. `OIDC_ISSUER` / `OIDC_AUDIENCE` are the common
+service environment variables. Existing `ZITADEL_ISSUER` / `OIDC_PROJECT_ID`
+remain aliases, with the neutral variables taking precedence.
+
+JWT roles (default `roles`, or `auth.oidcRolesClaim`) are informational.
+Administration and resource permissions remain explicit records in the hub
+DB; an IdP group alone does not grant admin access.
 
 #### Pinning the JWKS / userinfo endpoints
 

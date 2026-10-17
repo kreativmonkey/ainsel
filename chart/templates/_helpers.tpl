@@ -43,3 +43,14 @@ cluster while relying on it.
 true
 {{- end -}}
 {{- end -}}
+
+{{/* Shared provider scopes for browser and MCP clients. */}}
+{{- define "ainsel.oidcScopes" -}}
+{{- if .Values.auth.oidcScopes -}}
+{{- .Values.auth.oidcScopes -}}
+{{- else if .Values.auth.oidcProjectId -}}
+openid profile email urn:zitadel:iam:org:project:id:{{ .Values.auth.oidcProjectId }}:aud
+{{- else -}}
+openid profile email offline_access
+{{- end -}}
+{{- end -}}

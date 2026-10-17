@@ -13,8 +13,8 @@
 
 ### Auth (OIDC)
 
-The chart renders the base auth vars (`HUB_AUTH_MODE`, `ZITADEL_ISSUER`,
-`OIDC_PROJECT_ID`, …) from `auth.*` values — see
+The chart renders the base auth vars (`HUB_AUTH_MODE`, `OIDC_ISSUER`,
+`OIDC_AUDIENCE`, `OIDC_ROLES_CLAIM`, …) from `auth.*` values — see
 [deployment.md](../../../docs/deployment.md) and the chart README. The
 endpoint overrides below have **no chart values**; set them as raw hub-backend
 pod env (e.g. `hub.extraEnv`):

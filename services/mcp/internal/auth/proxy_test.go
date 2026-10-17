@@ -11,9 +11,9 @@ import (
 
 func TestOIDCConfigHandler(t *testing.T) {
 	cfg := auth.ProxyConfig{
-		ProxyIssuer:   "https://mcp.test/ainsel-dev/mcp",
-		ZitadelIssuer: "https://auth.test",
-		ClientID:      "client-123",
+		ProxyIssuer: "https://mcp.test/ainsel-dev/mcp",
+		Issuer:      discoveryServer(t),
+		ClientID:    "client-123",
 	}
 
 	h, err := auth.OIDCConfigHandler(cfg)
@@ -36,6 +36,16 @@ func TestOIDCConfigHandler(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json.Unmarshal: %v; body = %s", err, rec.Body.String())
 	}
+	for _, endpoint := range []struct{ field, want string }{
+		{"authorization_endpoint", "https://idp.test/custom/authorize"},
+		{"token_endpoint", "https://idp.test/custom/token"},
+		{"jwks_uri", "https://idp.test/custom/keys"},
+		{"userinfo_endpoint", "https://idp.test/custom/userinfo"},
+	} {
+		if body[endpoint.field] != endpoint.want {
+			t.Errorf("%s = %v; want %s", endpoint.field, body[endpoint.field], endpoint.want)
+		}
+	}
 	if body["issuer"] != cfg.ProxyIssuer {
 		t.Errorf("issuer = %q; want %q", body["issuer"], cfg.ProxyIssuer)
 	}
@@ -46,9 +56,9 @@ func TestOIDCConfigHandler(t *testing.T) {
 
 func TestOAuthASMetadataHandler(t *testing.T) {
 	cfg := auth.ProxyConfig{
-		ProxyIssuer:   "https://mcp.test/ainsel-dev/mcp",
-		ZitadelIssuer: "https://auth.test",
-		ClientID:      "client-123",
+		ProxyIssuer: "https://mcp.test/ainsel-dev/mcp",
+		Issuer:      discoveryServer(t),
+		ClientID:    "client-123",
 	}
 
 	h, err := auth.OAuthASMetadataHandler(cfg)
@@ -71,7 +81,34 @@ func TestOAuthASMetadataHandler(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json.Unmarshal: %v; body = %s", err, rec.Body.String())
 	}
+	for _, endpoint := range []struct{ field, want string }{
+		{"authorization_endpoint", "https://idp.test/custom/authorize"},
+		{"token_endpoint", "https://idp.test/custom/token"},
+		{"jwks_uri", "https://idp.test/custom/keys"},
+		{"userinfo_endpoint", "https://idp.test/custom/userinfo"},
+	} {
+		if body[endpoint.field] != endpoint.want {
+			t.Errorf("%s = %v; want %s", endpoint.field, body[endpoint.field], endpoint.want)
+		}
+	}
 	if body["issuer"] != cfg.ProxyIssuer {
 		t.Errorf("issuer = %q; want %q", body["issuer"], cfg.ProxyIssuer)
+	}
+}
+
+func discoveryServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jwks_uri":"https://idp.test/custom/keys","authorization_endpoint":"https://idp.test/custom/authorize","token_endpoint":"https://idp.test/custom/token","userinfo_endpoint":"https://idp.test/custom/userinfo"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestOIDCConfigHandlerDiscoveryFailure(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	if _, err := auth.OIDCConfigHandler(auth.ProxyConfig{Issuer: srv.URL}); err == nil {
+		t.Fatal("expected discovery failure")
 	}
 }

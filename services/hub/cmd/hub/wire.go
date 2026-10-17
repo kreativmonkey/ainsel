@@ -177,15 +177,14 @@ func wireAPIServer(c *container, cfg containerConfig) *api.Server {
 // HUB_AUTH_MODE: "oidc" (external IdP, today's default), "local" (hub
 // username/password accounts, issue #108), or "none" (no auth; requires
 // HUB_ALLOW_INSECURE_NO_AUTH=true). When HUB_AUTH_MODE is unset the mode is
-// derived for backward compatibility: OIDC when both ZITADEL_ISSUER and
-// OIDC_PROJECT_ID are set, otherwise "none".
+// derived from the common OIDC issuer and audience settings when unset.
 func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) error {
-	issuer := os.Getenv("ZITADEL_ISSUER")
-	projectID := os.Getenv("OIDC_PROJECT_ID")
+	oidcCfg := oidc.FromEnvironment()
+	issuer, audience := oidcCfg.Issuer, oidcCfg.Audience
 
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("HUB_AUTH_MODE")))
 	if mode == "" {
-		if issuer != "" && projectID != "" {
+		if issuer != "" && audience != "" {
 			mode = "oidc"
 		} else {
 			mode = "none"
@@ -195,10 +194,10 @@ func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) 
 
 	switch mode {
 	case "oidc":
-		if issuer == "" || projectID == "" {
-			return fmt.Errorf("auth mode oidc requires ZITADEL_ISSUER and OIDC_PROJECT_ID to be set")
+		if issuer == "" || audience == "" {
+			return fmt.Errorf("auth mode oidc requires OIDC_ISSUER and OIDC_AUDIENCE (or OIDC_CLIENT_ID) to be set")
 		}
-		if err := wireOIDCAuth(c, issuer, projectID); err != nil {
+		if err := wireOIDCAuth(c, issuer, audience); err != nil {
 			return err
 		}
 	case "local":
@@ -246,8 +245,8 @@ func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) 
 }
 
 // wireOIDCAuth builds the OIDC middleware chain (previous default behavior).
-func wireOIDCAuth(c *container, issuer, projectID string) error {
-	slog.Info("OIDC auth enabled", "issuer", issuer, "projectID", projectID)
+func wireOIDCAuth(c *container, issuer, audience string) error {
+	slog.Info("OIDC auth enabled", "issuer", issuer, "audience", audience)
 	// Resolve JWKS/userinfo endpoints from the issuer's OIDC discovery
 	// document. Hardcoding provider-specific paths broke username/email
 	// enrichment on Zitadel versions whose userinfo endpoint lives at
@@ -269,7 +268,8 @@ func wireOIDCAuth(c *container, issuer, projectID string) error {
 	}
 	oidcMW, err := oidc.NewMiddleware(oidc.Config{
 		Issuer:      issuer,
-		Audience:    projectID,
+		Audience:    audience,
+		RolesClaim:  os.Getenv("OIDC_ROLES_CLAIM"),
 		JWKSURL:     jwksURL,
 		UserInfoURL: userInfoURL,
 	})

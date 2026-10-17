@@ -18,7 +18,7 @@ func roleCovers(have, need GroupRole) bool {
 	return rank[have] >= rank[need]
 }
 
-// User is a hub-managed user record, synced lazily from Zitadel JWT claims.
+// User is a hub-managed user record, synced lazily from OIDC JWT claims.
 type User struct {
 	ID        string    `json:"id"`
 	Email     string    `json:"email"`

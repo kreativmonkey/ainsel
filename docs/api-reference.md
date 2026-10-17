@@ -1553,7 +1553,7 @@ The API supports two authentication methods. See
 
 ### OIDC (interactive)
 
-Browser-based authentication via Zitadel. API requests carry a standard
+Browser-based authentication via the configured OIDC provider. API requests carry a standard
 `Authorization: Bearer <jwt>` header. The OIDC middleware validates the
 token against the configured issuer and audience.
 

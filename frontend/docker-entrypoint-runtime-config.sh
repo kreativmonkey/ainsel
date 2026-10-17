@@ -4,13 +4,12 @@
 # anywhere.
 #
 # AUTH_MODE controls what the SPA does at load time:
-#   oidc  - OIDC redirect flow (requires OIDC_ISSUER/CLIENT_ID/PROJECT_ID)
+#   oidc  - OIDC redirect flow (requires OIDC_ISSUER/CLIENT_ID)
 #   local - hub username/password login
 #   none  - no auth (port-forward or edge-proxy installs)
 #
 # When AUTH_MODE is empty, behavior is backward compatible: config is only
-# written when all three OIDC vars are set, otherwise the baked defaults
-# (all-empty = no-auth) stay in place.
+# written when issuer/client ID are set. Partial OIDC settings fail startup.
 set -eu
 
 ROOT=/usr/share/nginx/html
@@ -20,6 +19,7 @@ AUTH_MODE="${AUTH_MODE:-}"
 OIDC_ISSUER="${OIDC_ISSUER:-}"
 OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-}"
 OIDC_PROJECT_ID="${OIDC_PROJECT_ID:-}"
+OIDC_SCOPES="${OIDC_SCOPES:-}"
 FORGEJO_API_BASE="${FORGEJO_API_BASE:-}"
 FORGEJO_REPO="${FORGEJO_REPO:-}"
 
@@ -31,6 +31,7 @@ window.__AINSEL_CONFIG__ = {
   oidcIssuer: "${OIDC_ISSUER}",
   oidcClientId: "${OIDC_CLIENT_ID}",
   oidcProjectId: "${OIDC_PROJECT_ID}",
+  oidcScopes: "${OIDC_SCOPES}",
   forgejoApiBase: "${FORGEJO_API_BASE}",
   forgejoRepo: "${FORGEJO_REPO}",
 };
@@ -44,8 +45,8 @@ case "$AUTH_MODE" in
     exit 0
     ;;
   oidc)
-    if [ -z "$OIDC_ISSUER" ] || [ -z "$OIDC_CLIENT_ID" ] || [ -z "$OIDC_PROJECT_ID" ]; then
-      echo "ainsel-hub-frontend: ERROR: AUTH_MODE=oidc requires OIDC_ISSUER, OIDC_CLIENT_ID, and OIDC_PROJECT_ID" >&2
+    if [ -z "$OIDC_ISSUER" ] || [ -z "$OIDC_CLIENT_ID" ]; then
+      echo "ainsel-hub-frontend: ERROR: AUTH_MODE=oidc requires OIDC_ISSUER and OIDC_CLIENT_ID" >&2
       exit 1
     fi
     write_config "oidc"
@@ -53,10 +54,12 @@ case "$AUTH_MODE" in
     exit 0
     ;;
   "")
-    # Backward-compatible path: write config only when OIDC is fully set.
-    if [ -z "$OIDC_ISSUER" ] || [ -z "$OIDC_CLIENT_ID" ] || [ -z "$OIDC_PROJECT_ID" ]; then
-      echo "ainsel-hub-frontend: WARNING: AUTH_MODE not set and OIDC vars incomplete; keeping baked defaults (no-auth)" >&2
+    if [ -z "$OIDC_ISSUER$OIDC_CLIENT_ID$OIDC_PROJECT_ID" ]; then
       exit 0
+    fi
+    if [ -z "$OIDC_ISSUER" ] || [ -z "$OIDC_CLIENT_ID" ]; then
+      echo "ainsel-hub-frontend: ERROR: incomplete OIDC settings; issuer and client ID are required" >&2
+      exit 1
     fi
     write_config "oidc"
     echo "ainsel-hub-frontend: runtime-config.js written (authMode=oidc, issuer=${OIDC_ISSUER})"
