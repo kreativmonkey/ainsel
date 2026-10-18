@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { buildPrompt, runOneShot, runtimeEnvironment, redactKnownSecrets, pullRequestContext } from './runner.mjs';
+import * as codex from './executors/codex.mjs';
 
 const env = {
   AINSEL_TASK_ID: '42', AGENT_NAME: 'reviewer', HUB_URL: 'http://hub',
@@ -30,6 +32,40 @@ test('successful task posts conversation and ACKs after CLI response', async () 
   assert.match(h.calls[2].url, /tasks\/42\/ack$/);
   assert.equal(h.calls[0].opts.headers['X-Internal-Token'], 'secret');
   assert.equal(JSON.parse(h.calls[1].opts.body).repo, 'owner/repo');
+});
+
+test('Codex subscription default leaves model selection to Codex CLI', async () => {
+  let args;
+  const actualCodex = {
+    ...codex,
+    runTask: (options) => codex.runTask({
+      ...options,
+      spawn: (command, actualArgs, spawnOptions) => {
+        assert.equal(command, 'codex');
+        args = actualArgs;
+        return spawn(process.execPath, ['-e', `process.stdin.resume(); process.stdin.on('end', () => { console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Review done'}})); console.log(JSON.stringify({type:'turn.completed'})); })`], { ...spawnOptions, cwd: process.cwd() });
+      },
+    }),
+  };
+  const h = harness();
+  h.implementations = { codex: actualCodex };
+  const codexEnv = { ...env, OLLAMA_CLOUD_MODEL: 'codex-cli-default' };
+  assert.equal(await runOneShot({ env: codexEnv, ...h }), 'completed');
+  assert.equal(JSON.parse(h.calls[1].opts.body).model, '');
+  assert.equal(args.includes('--model'), false);
+
+  let explicitArgs;
+  const explicit = harness();
+  explicit.implementations = { codex: {
+    ...codex,
+    runTask: (options) => codex.runTask({ ...options, spawn: (command, actualArgs, spawnOptions) => {
+      assert.equal(command, 'codex');
+      explicitArgs = actualArgs;
+      return spawn(process.execPath, ['-e', `process.stdin.resume(); process.stdin.on('end', () => { console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Review done'}})); console.log(JSON.stringify({type:'turn.completed'})); })`], { ...spawnOptions, cwd: process.cwd() });
+    } }),
+  } };
+  assert.equal(await runOneShot({ env: { ...codexEnv, OLLAMA_CLOUD_MODEL: 'gpt-5-codex' }, ...explicit }), 'completed');
+  assert.deepEqual(explicitArgs.slice(-3), ['--model', 'gpt-5-codex', '-']);
 });
 
 test('CLI failure NACKs; retry backoff skips execution', async () => {
