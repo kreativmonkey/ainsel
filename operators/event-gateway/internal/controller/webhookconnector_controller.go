@@ -53,6 +53,7 @@ type WebhookConnectorReconciler struct {
 	HubURL                   string
 	HubInternalSecret        string
 	ConnectorImagePullPolicy corev1.PullPolicy
+	ConnectorTLSSecretName   string
 }
 
 //+kubebuilder:rbac:groups=ainsel.dev,resources=webhookconnectors,verbs=get;list;watch;create;update;patch;delete
@@ -273,6 +274,11 @@ func (r *WebhookConnectorReconciler) reconcileWebhookIngress(ctx context.Context
 		return fmt.Errorf("webhook endpoint has no path: %s", cr.Spec.WebhookEndpoint)
 	}
 
+	tlsSecretName := r.ConnectorTLSSecretName
+	if tlsSecretName == "" {
+		tlsSecretName = "webhook-tls" // #nosec G101 -- K8s secret reference name, not a credential
+	}
+
 	name := webhookConnectorResourceName(cr) + "-webhook"
 	labels := webhookConnectorLabels(cr)
 	svcName := webhookConnectorResourceName(cr)
@@ -323,7 +329,7 @@ func (r *WebhookConnectorReconciler) reconcileWebhookIngress(ctx context.Context
 			TLS: []networkingv1.IngressTLS{
 				{
 					Hosts:      []string{webhookURL.Host},
-					SecretName: "webhook-tls", // #nosec G101 -- K8s secret reference name, not a credential
+					SecretName: tlsSecretName,
 				},
 			},
 		}

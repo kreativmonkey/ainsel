@@ -77,6 +77,8 @@ spec:
             - name: HUB_INTERNAL_VALIDATE_SECRET
               value: {{ .Values.auth.internalValidateSecret | quote }}
             {{- end }}
+            - name: CONNECTOR_TLS_SECRET_NAME
+              value: {{ .Values.connectorOperator.tlsSecretName | default "webhook-tls" | quote }}
             - name: CONNECTOR_IMAGE_PULL_POLICY
               value: {{ .Values.connectorOperator.connectorImagePullPolicy | default "IfNotPresent" | quote }}
             {{- with .Values.connectorOperator.extraEnv }}

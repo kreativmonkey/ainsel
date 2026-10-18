@@ -115,6 +115,8 @@ agentOperator:
     tag: latest
 
 connectorOperator:
+  # Must exist in the connector namespace and cover the webhook hostname.
+  tlsSecretName: webhook-tls
   image:
     repository: dpinsel/ainsel-k8s-event-source-gateway-operator
     tag: latest
@@ -388,3 +390,19 @@ worked examples (code review, issue triage, comment Q&A,
 issue → PR implementation).
 
 For troubleshooting common deployment issues, see [docs/troubleshooting.md](troubleshooting.md).
+
+### Connector webhook TLS certificates
+
+`connectorOperator.tlsSecretName` selects the existing TLS Secret referenced by
+all connector Ingresses (default: `webhook-tls`). The Secret must exist in each
+connector's namespace and its certificate must cover the webhook hostname.
+When webhooks share the UI hostname, use the same Secret as the UI Ingress.
+The chart passes this value as `CONNECTOR_TLS_SECRET_NAME`; standalone operator
+deployments may set that environment variable directly. Empty or unset retains
+the `webhook-tls` default.
+
+Deploy both a chart and an event gateway operator image containing this setting.
+Updating the value rolls the operator Deployment; on startup it reconciles
+existing connectors and updates their Ingress TLS references. No connector
+recreation or CRD migration is needed. The operator references the Secret; it
+does not issue or copy certificates.

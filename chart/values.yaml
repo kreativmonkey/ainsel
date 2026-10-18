@@ -133,6 +133,9 @@ connectorOperator:
   # mutable tags (e.g. :dev) so newly built images are picked up on rollout;
   # IfNotPresent is fine for immutable release tags.
   connectorImagePullPolicy: IfNotPresent
+  # Existing TLS Secret in each connector namespace, covering its webhook host.
+  # Shared by all connector Ingresses; empty also defaults to webhook-tls.
+  tlsSecretName: webhook-tls
   resources:
     requests:
       cpu: 50m

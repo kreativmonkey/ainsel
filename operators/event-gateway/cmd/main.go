@@ -185,6 +185,7 @@ func main() {
 		HubURL:                   requireEnv("HUB_URL"),
 		HubInternalSecret:        os.Getenv("HUB_INTERNAL_VALIDATE_SECRET"),
 		ConnectorImagePullPolicy: connectorImagePullPolicy(),
+		ConnectorTLSSecretName:   os.Getenv("CONNECTOR_TLS_SECRET_NAME"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "WebhookConnector")
 		os.Exit(1)
