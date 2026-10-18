@@ -390,7 +390,7 @@ INTERNAL_VALIDATE_SECRET=<shared-secret> \
 ```
 
 The server only needs `HUB_URL` to reach the hub; everything else
-(Prometheus, mem0) is accessed through the hub. Run
+(e.g. Prometheus) is accessed through the hub. Run
 `make test` for the test suite.
 
 ## Reference

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { extractEventContext, buildUserMessage, createTurnTracker, beginTurn, endTurn, recordAssistantEnd, captureMessage, markSettled, waitForSettle, toConversationPayloads, postTaskMessages, reportConversation, flushTurnMessages, queueConversationFlush, redactSecrets, resetRedactionCache, writeAgentPidFile, capToolResultContent, truncateWithMarker, resolveToolResultMaxChars, resolveEventDataMaxChars, resolveInternalToken, tokenComponents, costOf, eventSubject } from "./index.ts";
+import { extractEventContext, buildUserMessage, createTurnTracker, beginTurn, endTurn, recordAssistantEnd, captureMessage, markSettled, waitForSettle, toConversationPayloads, postTaskMessages, reportConversation, flushTurnMessages, queueConversationFlush, redactSecrets, resetRedactionCache, writeAgentPidFile, capToolResultContent, truncateWithMarker, resolveToolResultMaxChars, resolveEventDataMaxChars, resolveInternalToken, tokenComponents, costOf, hasRecordableUsage, recordUsage, counterValue, summaryConversationMessage, registerUsageEvents, eventSubject } from "./index.ts";
 import type { HubEvent, TurnTracker, ConversationPayload } from "./index.ts";
 
 describe("extractEventContext", () => {
@@ -1646,6 +1646,384 @@ describe("costOf", () => {
 		assert.equal(costOf({ cost: { total: "3" } }), 0);
 		assert.equal(costOf({ cost: { total: Number.NaN } }), 0);
 		assert.equal(costOf({ cost: { total: -1 } }), 0);
+	});
+});
+
+describe("hasRecordableUsage", () => {
+	it("is true for any positive token component", () => {
+		assert.equal(hasRecordableUsage({ input: 0, output: 0, cacheRead: 4096, cacheWrite: 0 }), true);
+		assert.equal(hasRecordableUsage({ input: 1, output: 0 }), true);
+	});
+
+	it("is true for priced tokens pi reports without any token counts", () => {
+		assert.equal(hasRecordableUsage({ cost: { total: 0.01 } }), true);
+	});
+
+	it("is false for absent, empty and all-zero usage", () => {
+		// The guard the old role check replaced: these must stay out of both
+		// destinations rather than raising a zero series.
+		assert.equal(hasRecordableUsage(undefined), false);
+		assert.equal(hasRecordableUsage(null), false);
+		assert.equal(hasRecordableUsage({}), false);
+		assert.equal(hasRecordableUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } }), false);
+	});
+});
+
+// The counter labels come from the env the runner sets per task, so a counter
+// assertion has to pin them and put them back afterwards.
+function withEventEnv(labels: Record<string, string>, fn: () => Promise<void> | void): Promise<void> {
+	const keys = [
+		"AINSEL_EVENT_AGENT",
+		"AINSEL_EVENT_REPO",
+		"AINSEL_EVENT_ORG",
+		"AINSEL_EVENT_TYPE",
+		"OLLAMA_CLOUD_MODEL",
+	];
+	const saved: Record<string, string | undefined> = {};
+	for (const key of keys) {
+		saved[key] = process.env[key];
+		delete process.env[key];
+	}
+	for (const [key, value] of Object.entries(labels)) process.env[key] = value;
+	const restore = () => {
+		for (const key of keys) {
+			if (saved[key] === undefined) delete process.env[key];
+			else process.env[key] = saved[key] as string;
+		}
+	};
+	try {
+		return Promise.resolve(fn()).then(restore, (err) => {
+			restore();
+			throw err;
+		});
+	} catch (err) {
+		restore();
+		throw err;
+	}
+}
+
+describe("recordUsage", () => {
+	it("books every token component and the cost of a completion", () => {
+		// A compaction prompt is the whole conversation: most of it comes back
+		// as cache traffic, which only shows up if each component is raised.
+		withEventEnv(
+			{
+				AINSEL_EVENT_AGENT: "olli",
+				AINSEL_EVENT_REPO: "ainsel-project/ainsel",
+				AINSEL_EVENT_ORG: "ainsel-project",
+				AINSEL_EVENT_TYPE: "issues.opened",
+			},
+			async () => {
+				const booked = recordUsage(
+					{
+						input: 30_000,
+						output: 900,
+						cacheRead: 12_000,
+						cacheWrite: 0,
+						totalTokens: 42_900,
+						cost: { input: 0.1, output: 0.02, cacheRead: 0.01, cacheWrite: 0, total: 0.13 },
+					},
+					"compaction-model-a",
+					"compaction",
+				);
+				assert.equal(booked, true);
+				const labels = { model: "compaction-model-a" };
+				assert.equal(await counterValue("agent_tokens_used_total", { ...labels, token_type: "input" }), 30_000);
+				assert.equal(await counterValue("agent_tokens_used_total", { ...labels, token_type: "output" }), 900);
+				assert.equal(await counterValue("agent_tokens_used_total", { ...labels, token_type: "cache_read" }), 12_000);
+				// Zero components raise no series, so no dead cache_write line.
+				assert.equal(await counterValue("agent_tokens_used_total", { ...labels, token_type: "cache_write" }), 0);
+				assert.equal(await counterValue("agent_cost_usd_total", labels), 0.13);
+			},
+		);
+	});
+
+	it("books nothing for absent or all-zero usage", () => {
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli" }, async () => {
+			assert.equal(recordUsage(undefined, "zero-model"), false);
+			assert.equal(recordUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "zero-model"), false);
+			assert.equal(await counterValue("agent_tokens_used_total", { model: "zero-model", token_type: "input" }), 0);
+		});
+	});
+
+	it("counts a compaction completion once, not again with the neighbouring assistant message", () => {
+		// The compaction completion is its own LLM call: pi never emits it as a
+		// message, so the assistant message before it does not already carry
+		// these tokens. Booking it once here and once from message_end would
+		// double the largest prompt in the session.
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: "once-model" }, async () => {
+			const assistantUsage = { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120, cost: { total: 0.001 } };
+			const compactionUsage = { input: 30_000, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 30_500, cost: { total: 0.05 } };
+			// What the message_end handler does for the assistant message…
+			recordUsage(assistantUsage, "once-model");
+			// …and what the session_compact handler does for the summary.
+			recordUsage(compactionUsage, "once-model", "compaction");
+			assert.equal(await counterValue("agent_tokens_used_total", { model: "once-model", token_type: "input" }), 30_100);
+			assert.equal(await counterValue("agent_tokens_used_total", { model: "once-model", token_type: "output" }), 520);
+			// Float sum of two counter increments: compare with a tolerance.
+			assert.ok(Math.abs((await counterValue("agent_cost_usd_total", { model: "once-model" })) - 0.051) < 1e-9);
+		});
+	});
+});
+
+describe("summaryConversationMessage", () => {
+	it("turns a compaction entry into a system row carrying its usage", () => {
+		const usage = { input: 40_000, output: 800, cacheRead: 512, cacheWrite: 0, totalTokens: 41_312, cost: { total: 0.2 } };
+		const row = summaryConversationMessage(
+			{ type: "compaction", summary: "the conversation so far", usage, firstKeptEntryId: "e1", tokensBefore: 40_000 },
+			"compaction",
+			"gpt-x",
+		);
+		assert.ok(row);
+		assert.equal(row.role, "system");
+		assert.equal(row.stopReason, "compaction");
+		assert.equal(row.model, "gpt-x");
+		assert.equal(row.usage, usage);
+		assert.deepEqual(row.content, [{ type: "text", text: "the conversation so far" }]);
+	});
+
+	it("returns null when the entry carries no usage", () => {
+		// Nothing to record: the row would be noise in the transcript and the
+		// hub's Postgres totals are preferred over the counters.
+		assert.equal(summaryConversationMessage({ summary: "s" }, "compaction", "m"), null);
+		assert.equal(
+			summaryConversationMessage({ summary: "s", usage: { input: 0, output: 0, cost: { total: 0 } } }, "branch_summary", "m"),
+			null,
+		);
+		assert.equal(summaryConversationMessage(undefined, "compaction", "m"), null);
+	});
+
+	it("keeps a summary pi left empty", () => {
+		const row = summaryConversationMessage({ usage: { input: 5, output: 1 } }, "branch_summary", "m");
+		assert.deepEqual(row.content, [{ type: "text", text: "" }]);
+	});
+});
+
+describe("toConversationPayloads — compaction and branch-summary rows", () => {
+	const meta = {
+		agentName: "olli",
+		invocationId: "inv-1",
+		correlationId: "corr-1",
+		repo: "ainsel-project/ainsel",
+		org: "ainsel-project",
+		eventType: "issues.opened",
+		issueNumber: 76,
+	};
+
+	it("reads usage off a system row so the hub's Postgres totals include it", () => {
+		// The hub prefers task_conversations over the counters whenever
+		// Postgres is ready, so a compaction that only reached the counters
+		// would still be missing from the UI.
+		const row = summaryConversationMessage(
+			{ summary: "summary of 40k tokens", usage: { input: 40_000, output: 800, cacheRead: 512, cacheWrite: 64, cost: { total: 0.2 } } },
+			"compaction",
+			"gpt-x",
+		);
+		const out = toConversationPayloads([row], meta);
+		assert.equal(out.length, 1);
+		assert.equal(out[0].role, "system");
+		assert.equal(out[0].stopReason, "compaction");
+		assert.equal(out[0].model, "gpt-x");
+		assert.equal(out[0].inputTokens, 40_000);
+		assert.equal(out[0].outputTokens, 800);
+		assert.equal(out[0].cacheReadTokens, 512);
+		assert.equal(out[0].cacheWriteTokens, 64);
+		assert.equal(out[0].costUsd, 0.2);
+		assert.equal(out[0].repo, "ainsel-project/ainsel");
+		assert.equal(out[0].issueNumber, 76);
+		assert.deepEqual(JSON.parse(out[0].content), [{ type: "text", text: "summary of 40k tokens" }]);
+	});
+
+	it("keeps a branch summary row distinct from the assistant row beside it", () => {
+		// Each row carries its own usage: the summary's tokens are not part of
+		// the assistant message that preceded it, and neither is counted twice.
+		const messages = [
+			{
+				role: "assistant",
+				model: "gpt-x",
+				usage: { input: 10, output: 20, cost: { total: 0.001 } },
+				stopReason: "end_turn",
+				content: [{ type: "text", text: "done" }],
+			},
+			summaryConversationMessage(
+				{ summary: "branch", usage: { input: 5_000, output: 300, cost: { total: 0.02 } } },
+				"branch_summary",
+				"gpt-x",
+			),
+		];
+		const out = toConversationPayloads(messages, meta);
+		assert.equal(out.length, 2);
+		assert.equal(out[0].role, "assistant");
+		assert.equal(out[0].inputTokens, 10);
+		assert.equal(out[1].role, "system");
+		assert.equal(out[1].stopReason, "branch_summary");
+		assert.equal(out[1].inputTokens, 5_000);
+		assert.equal(out[1].outputTokens, 300);
+	});
+
+	it("skips a system message that carries no usage", () => {
+		// pi's own prompt-section patches are system messages with no usage;
+		// they are not consumption and must not become rows.
+		const out = toConversationPayloads(
+			[{ role: "system", content: "", sections: { tools: "a b c" }, timestamp: 1 }],
+			meta,
+		);
+		assert.deepEqual(out, []);
+	});
+
+	it("redacts secrets in a summary row", () => {
+		process.env.TEST_SECRET_76 = "sup3r-s3cret-value";
+		resetRedactionCache();
+		try {
+			const row = summaryConversationMessage(
+				{ summary: "token was sup3r-s3cret-value", usage: { input: 5, output: 1 } },
+				"compaction",
+				"m",
+			);
+			const out = toConversationPayloads([row], meta);
+			assert.ok(!out[0].content.includes("sup3r-s3cret-value"));
+			assert.ok(out[0].content.includes("***"));
+		} finally {
+			delete process.env.TEST_SECRET_76;
+			resetRedactionCache();
+		}
+	});
+});
+
+describe("registerUsageEvents", () => {
+	// A minimal pi stand-in: registerUsageEvents only ever calls on().
+	function fakePi(): { handlers: Record<string, (event: any) => void>; pi: any } {
+		const handlers: Record<string, (event: any) => void> = {};
+		return { handlers, pi: { on: (event: string, handler: any) => { handlers[event] = handler; } } };
+	}
+
+	it("books a compaction completion once and captures its row", async () => {
+		const { handlers, pi } = fakePi();
+		const tracker = createTurnTracker();
+		registerUsageEvents(pi, tracker);
+		const model = "wiring-model";
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: model }, async () => {
+			beginTurn(tracker);
+			handlers.message_end({
+				message: {
+					role: "assistant",
+					model,
+					stopReason: "end_turn",
+					usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120, cost: { total: 0.001 } },
+					content: [{ type: "text", text: "working" }],
+				},
+			});
+			handlers.session_compact({
+				compactionEntry: {
+					type: "compaction",
+					summary: "everything so far",
+					usage: { input: 40_000, output: 500, cacheRead: 1_024, cacheWrite: 0, totalTokens: 41_524, cost: { total: 0.05 } },
+				},
+				fromExtension: false,
+				reason: "threshold",
+				willRetry: false,
+			});
+
+			// Each LLM call counted once: the summary's tokens are its own, not
+			// already carried by the assistant message next to it.
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "input" }), 40_100);
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "cache_read" }), 1_024);
+
+			const rows = toConversationPayloads(tracker.capturedMessages.map((e) => e.message), {
+				agentName: "olli",
+				invocationId: "inv-1",
+				correlationId: "corr-1",
+			});
+			assert.equal(rows.length, 2);
+			assert.equal(rows[0].role, "assistant");
+			assert.equal(rows[0].inputTokens, 100);
+			assert.equal(rows[1].role, "system");
+			assert.equal(rows[1].stopReason, "compaction");
+			assert.equal(rows[1].model, model);
+			assert.equal(rows[1].inputTokens, 40_000);
+			assert.equal(rows[1].costUsd, 0.05);
+		});
+	});
+
+	it("books a branch summary from session_tree", async () => {
+		const { handlers, pi } = fakePi();
+		const tracker = createTurnTracker();
+		registerUsageEvents(pi, tracker);
+		const model = "tree-model";
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: model }, async () => {
+			beginTurn(tracker);
+			handlers.session_tree({
+				newLeafId: "e2",
+				oldLeafId: "e1",
+				summaryEntry: {
+					type: "branch_summary",
+					summary: "abandoned branch",
+					usage: { input: 7_000, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 7_200, cost: { total: 0.01 } },
+				},
+			});
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "input" }), 7_000);
+			assert.equal(tracker.capturedMessages.length, 1);
+			assert.equal(tracker.capturedMessages[0].message.stopReason, "branch_summary");
+		});
+	});
+
+	it("records nothing for a navigation that summarised nothing", async () => {
+		const { handlers, pi } = fakePi();
+		const tracker = createTurnTracker();
+		registerUsageEvents(pi, tracker);
+		const model = "empty-tree-model";
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: model }, async () => {
+			beginTurn(tracker);
+			handlers.session_tree({ newLeafId: "e2", oldLeafId: "e1" });
+			handlers.session_tree({
+				newLeafId: "e3",
+				oldLeafId: "e2",
+				summaryEntry: { type: "branch_summary", summary: "", usage: { input: 0, output: 0, cost: { total: 0 } } },
+			});
+			handlers.session_compact({ compactionEntry: { type: "compaction", summary: "no usage" } });
+			assert.equal(tracker.capturedMessages.length, 0);
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "input" }), 0);
+		});
+	});
+
+	it("books usage a non-assistant message reports", async () => {
+		// pi types usage on tool results too; the role guard used to drop it.
+		const { handlers, pi } = fakePi();
+		const tracker = createTurnTracker();
+		registerUsageEvents(pi, tracker);
+		const model = "tool-model";
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: model }, async () => {
+			beginTurn(tracker);
+			handlers.message_end({
+				message: {
+					role: "toolResult",
+					toolCallId: "tc-1",
+					model,
+					usage: { input: 300, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 340 },
+					content: [{ type: "text", text: "ok" }],
+				},
+			});
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "input" }), 300);
+			// A tool result is not an assistant message: it must not mark the
+			// turn's assistant message as completed.
+			assert.equal(tracker.assistantMessageCompleted, false);
+		});
+	});
+
+	it("still books the tokens when no turn is active to hold the row", async () => {
+		// Idle compaction between tasks: captureMessage drops the row, the
+		// counter must not also lose the consumption.
+		const { handlers, pi } = fakePi();
+		const tracker = createTurnTracker();
+		registerUsageEvents(pi, tracker);
+		const model = "idle-model";
+		return withEventEnv({ AINSEL_EVENT_AGENT: "olli", OLLAMA_CLOUD_MODEL: model }, async () => {
+			handlers.session_compact({
+				compactionEntry: { type: "compaction", summary: "s", usage: { input: 12_000, output: 100, cost: { total: 0.02 } } },
+			});
+			assert.equal(tracker.capturedMessages.length, 0);
+			assert.equal(await counterValue("agent_tokens_used_total", { model, token_type: "input" }), 12_000);
+		});
 	});
 });
 
