@@ -227,8 +227,9 @@ client registration is handled there.
 | `auth.oidcIssuer` | string | `""` | OIDC issuer URL |
 | `auth.oidcClientId` | string | `""` | OIDC client id |
 | `auth.oidcAudience` | string | `""` | Expected JWT audience; defaults to legacy project ID, then client ID |
+| `auth.oidcSigningAlgs` | string | `"RS256"` | Comma-separated JWT signing algorithm allowlist: RS256/384/512, PS256/384/512, ES256/384/512, EdDSA. Symmetric algorithms and `none` fail startup |
 | `auth.oidcScopes` | string | `""` | Space-separated scopes; standard default `openid profile email offline_access`, or explicit legacy project scope |
-| `auth.oidcRolesClaim` | string | `""` | Optional JWT role/group claim. Informational; hub DB manages permissions |
+| `auth.oidcRolesClaim` | string | `"urn:zitadel:iam:org:project:roles"` | JWT role/group claim: exact key first, then dotted nested path (e.g. `realm_access.roles`). Set `groups` for a top-level groups array. Informational; hub DB manages permissions |
 | `auth.oidcProjectId` | string | `""` | Optional legacy Zitadel project audience/scope compatibility |
 | `auth.allowInsecureNoAuth` | bool | `false` | Run the hub backend **without** auth middleware (`HUB_ALLOW_INSECURE_NO_AUTH=true`). Only effective when `oidcIssuer` is empty. For local/air-gapped testing ONLY: every `/api/v1/*` endpoint becomes open to any caller. Never enable on a reachable host without an external auth proxy in front of the ingress. You normally do not need to set this by hand: when no ingress is enabled anywhere (hub/ui/mcp) and no OIDC issuer is set, the chart detects "local mode" and enables it automatically (see `values-quickstart.yaml`) |
 | `auth.internalValidateSecret` | string | `""` | Shared secret between hub-backend and the MCP service protecting the `/api/internal/user-tokens/validate` endpoint. When unset, user-token auth is disabled and OIDC remains the only MCP auth |

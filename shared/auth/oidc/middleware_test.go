@@ -900,7 +900,7 @@ func TestFetchUserInfo_Success(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	result, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "my-token")
+	result, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "my-token", "user-123")
 	if err != nil {
 		t.Fatalf("FetchUserInfo: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestFetchUserInfo_ServerError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "tok")
+	_, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "tok", "user-123")
 	if err == nil {
 		t.Fatal("expected error on server 500, got nil")
 	}

@@ -247,8 +247,12 @@ func (s *Server) handleUserSync(w http.ResponseWriter, r *http.Request, id strin
 		oidc.ClearUserInfoCacheEntry(u.Sub)
 
 		if s.userInfoURL != "" && token != "" {
-			result, err := oidc.FetchUserInfo(r.Context(), s.userInfoClient, s.userInfoURL, token)
+			result, err := oidc.FetchUserInfo(r.Context(), s.userInfoClient, s.userInfoURL, token, u.Sub)
 			if err != nil {
+				if errors.Is(err, oidc.ErrUserInfoSubjectMismatch) {
+					writeError(w, http.StatusUnauthorized, "invalid userinfo subject")
+					return
+				}
 				var uie *oidc.UserInfoError
 				if errors.As(err, &uie) {
 					slog.Error("userinfo fetch failed during sync; falling back to JWT claims", "upstream_status", uie.StatusCode, "error", err)

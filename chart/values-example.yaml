@@ -85,8 +85,9 @@ auth:
   oidcIssuer: ""
   oidcClientId: ""
   oidcAudience: ""
+  oidcSigningAlgs: "RS256"
   oidcScopes: "openid profile email offline_access"
-  oidcRolesClaim: ""
+  oidcRolesClaim: "groups"
   internalValidateSecret: ""
 
 forgejo:

@@ -1,7 +1,8 @@
 // Package oidc provides OIDC JWT validation middleware shared across the
 // AInsel services (hub, mcp). Tokens are validated against a JWKS endpoint
 // discovered via the issuer's OIDC discovery document (RFC 8414). Only
-// RS256 is accepted. On success a *User derived from the token claims
+// configured asymmetric signing algorithms are accepted (RS256 by default).
+// On success a *User derived from the token claims
 // (enriched via userinfo endpoint) is attached to the request context.
 package oidc
 
@@ -33,7 +34,8 @@ type User struct {
 type Config struct {
 	Issuer          string        // OIDC issuer URL (matches `iss` claim)
 	Audience        string        // Expected token audience (`aud`)
-	RolesClaim      string        // Optional claim name; defaults to roles, then the legacy Zitadel claim
+	RolesClaim      string        // Optional claim name or dotted path; defaults to the legacy Zitadel claim
+	SigningAlgs     []string      // Allowed asymmetric JWT algorithms; nil defaults to RS256
 	JWKSURL         string        // JWKS endpoint (from OIDC discovery; required)
 	UserInfoURL     string        // Optional: userinfo endpoint for enriched claims
 	RefreshEvery    time.Duration // JWKS refresh; defaults to 1h if zero
@@ -44,6 +46,10 @@ type Config struct {
 // value is an object whose keys are role names (the values, per-org assertions,
 // are ignored here).
 const zitadelRolesClaim = "urn:zitadel:iam:org:project:roles"
+
+// ErrUserInfoSubjectMismatch means UserInfo did not describe the authenticated
+// subject. Its claims must not be used, including during explicit profile sync.
+var ErrUserInfoSubjectMismatch = errors.New("userinfo: subject does not match authenticated token")
 
 // ctxKey is unexported so external packages can only access the *User via
 // FromContext, preventing accidental overwrite from outside the middleware.
@@ -102,7 +108,7 @@ func ClearUserInfoCache() {
 	globalUserInfoCache.entries = make(map[string]*userInfoEnrichment)
 }
 
-// NewMiddleware builds a net/http middleware that validates RS256 Bearer
+// NewMiddleware builds a net/http middleware that validates signed JWT Bearer
 // tokens against the issuer's JWKS and attaches the resulting *User to the
 // request context. JWKS fetching happens once here (so misconfiguration fails
 // fast at startup) and then refreshes on the configured interval.
@@ -120,6 +126,20 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 	if cfg.Audience == "" {
 		return nil, errors.New("auth: Audience is required")
 	}
+	algs := cfg.SigningAlgs
+	if algs == nil {
+		algs = []string{"RS256"}
+	}
+	if len(algs) == 0 {
+		return nil, errors.New("auth: at least one signing algorithm is required")
+	}
+	for _, alg := range algs {
+		switch alg {
+		case "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA":
+		default:
+			return nil, fmt.Errorf("auth: unsupported signing algorithm %q", alg)
+		}
+	}
 	refresh := cfg.RefreshEvery
 	if refresh <= 0 {
 		refresh = time.Hour
@@ -136,7 +156,7 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 	}
 
 	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods(algs),
 		jwt.WithIssuer(cfg.Issuer),
 		jwt.WithAudience(cfg.Audience),
 		jwt.WithExpirationRequired(),
@@ -170,6 +190,10 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 			}
 
 			u := userFromClaims(claims, cfg.RolesClaim)
+			if u.Sub == "" {
+				unauthorized(w, cfg.WWWAuthenticate, "invalid token subject")
+				return
+			}
 
 			// If userinfo URL is configured, enrich user data from userinfo endpoint.
 			// This gets claims like preferred_username that aren't in the JWT.
@@ -187,7 +211,11 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 					}
 				} else {
 					// Fetch from userinfo endpoint
-					enriched, err := fetchUserInfo(r.Context(), userInfoClient, userInfoURL, raw)
+					enriched, err := fetchUserInfo(r.Context(), userInfoClient, userInfoURL, raw, u.Sub)
+					if errors.Is(err, ErrUserInfoSubjectMismatch) {
+						unauthorized(w, cfg.WWWAuthenticate, "invalid userinfo subject")
+						return
+					}
 					if err != nil {
 						// Surface the failure: without userinfo the user may end up
 						// with an empty username/email (the JWT alone often does not
@@ -202,9 +230,6 @@ func NewMiddleware(cfg Config) (func(http.Handler) http.Handler, error) {
 						}
 						if enriched.Email != "" {
 							u.Email = enriched.Email
-						}
-						if enriched.Sub != "" {
-							u.Sub = enriched.Sub
 						}
 						// Cache only userinfo-derived fields (not roles)
 						globalUserInfoCache.set(u.Sub, enriched)
@@ -254,7 +279,10 @@ func (e *UserInfoError) Error() string {
 
 // fetchUserInfo calls the OIDC userinfo endpoint with the bearer token and
 // returns enriched user data (only userinfo-derived fields, not roles).
-func fetchUserInfo(ctx context.Context, client *http.Client, userInfoURL, token string) (*userInfoEnrichment, error) {
+func fetchUserInfo(ctx context.Context, client *http.Client, userInfoURL, token, expectedSub string) (*userInfoEnrichment, error) {
+	if expectedSub == "" {
+		return nil, ErrUserInfoSubjectMismatch
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
 	if err != nil {
 		return nil, err
@@ -279,6 +307,9 @@ func fetchUserInfo(ctx context.Context, client *http.Client, userInfoURL, token 
 	var info map[string]any
 	if err := json.Unmarshal(body, &info); err != nil {
 		return nil, err
+	}
+	if sub, ok := info["sub"].(string); !ok || sub != expectedSub {
+		return nil, ErrUserInfoSubjectMismatch
 	}
 
 	return userInfoToEnrichment(info), nil
@@ -313,9 +344,9 @@ type UserInfoResult struct {
 }
 
 // FetchUserInfo calls the OIDC userinfo endpoint with the given bearer token
-// and returns the result. It does not consult or update the in-memory cache.
-func FetchUserInfo(ctx context.Context, client *http.Client, userInfoURL, token string) (*UserInfoResult, error) {
-	e, err := fetchUserInfo(ctx, client, userInfoURL, token)
+// and verifies the authenticated subject. It does not consult or update the cache.
+func FetchUserInfo(ctx context.Context, client *http.Client, userInfoURL, token, expectedSub string) (*UserInfoResult, error) {
+	e, err := fetchUserInfo(ctx, client, userInfoURL, token, expectedSub)
 	if err != nil {
 		return nil, err
 	}
@@ -372,24 +403,39 @@ func userFromClaims(c jwt.MapClaims, rolesClaim string) *User {
 		Username: username,
 	}
 	if rolesClaim == "" {
-		rolesClaim = "roles"
-		if _, ok := c[rolesClaim]; !ok {
-			rolesClaim = zitadelRolesClaim // Backward compatibility only.
-		}
+		rolesClaim = zitadelRolesClaim
 	}
-	switch raw := c[rolesClaim].(type) {
+	switch raw := roleClaim(c, rolesClaim).(type) {
 	case []any:
 		for _, value := range raw {
 			if role, ok := value.(string); ok {
 				u.Roles = append(u.Roles, role)
 			}
 		}
+	case []string:
+		u.Roles = append(u.Roles, raw...)
 	case map[string]any:
 		for role := range raw {
 			u.Roles = append(u.Roles, role)
 		}
 	}
 	return u
+}
+
+// Prefer an exact claim name before interpreting dots as a nested path.
+func roleClaim(c jwt.MapClaims, name string) any {
+	if value, ok := c[name]; ok {
+		return value
+	}
+	var value any = map[string]any(c)
+	for _, part := range strings.Split(name, ".") {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		value = object[part]
+	}
+	return value
 }
 
 func stringClaim(c jwt.MapClaims, key string) string {
