@@ -4,6 +4,11 @@ import * as codex from './executors/codex.mjs';
 import * as claude from './executors/claude.mjs';
 
 const executors = { codex, claude };
+const codexDefaultModel = 'codex-cli-default';
+
+function configuredModel(engine, model) {
+  return engine === 'codex' && model === codexDefaultModel ? '' : model ?? '';
+}
 
 function required(env, key) {
   if (!env[key]) throw new Error(`${key} is required`);
@@ -145,10 +150,11 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   };
 
   let result;
+  const model = configuredModel(engine, env.OLLAMA_CLOUD_MODEL);
   try {
     const persona = env.AGENT_PERSONA_PATH ? await readPersona(env.AGENT_PERSONA_PATH, 'utf8') : '';
     const context = await pullRequestContext(task, { fetcher, repository: env.AINSEL_REVIEW_REPO, signal });
-    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd: '/workspace', model: env.OLLAMA_CLOUD_MODEL,
+    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd: '/workspace', model,
       env: runtimeEnvironment(env), signal });
     if (!result?.text) throw new Error('Runtime produced no assistant response');
   } catch (error) {
@@ -160,7 +166,7 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   // Conversation persistence is best effort; task acknowledgement is authoritative.
   try {
     await post('/api/internal/task-messages', { ...meta, role: 'assistant', content: redactKnownSecrets(result.text, env),
-      model: env.OLLAMA_CLOUD_MODEL ?? '', inputTokens: result.usage?.input_tokens ?? 0,
+      model, inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0 });
   } catch { /* observability must not re-run an already completed CLI task */ }
   await post(`${path}/ack`);

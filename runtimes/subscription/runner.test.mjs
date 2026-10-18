@@ -32,6 +32,25 @@ test('successful task posts conversation and ACKs after CLI response', async () 
   assert.equal(JSON.parse(h.calls[1].opts.body).repo, 'owner/repo');
 });
 
+test('Codex subscription default leaves model selection to Codex CLI', async () => {
+  let options;
+  const h = harness(undefined, async (taskOptions) => {
+    options = taskOptions;
+    return { text: 'Review done' };
+  });
+  const codexEnv = { ...env, OLLAMA_CLOUD_MODEL: 'codex-cli-default' };
+  assert.equal(await runOneShot({ env: codexEnv, ...h }), 'completed');
+  assert.equal(options.model, '');
+  assert.equal(JSON.parse(h.calls[1].opts.body).model, '');
+
+  const explicit = harness(undefined, async (taskOptions) => {
+    options = taskOptions;
+    return { text: 'Review done' };
+  });
+  assert.equal(await runOneShot({ env: { ...codexEnv, OLLAMA_CLOUD_MODEL: 'gpt-5-codex' }, ...explicit }), 'completed');
+  assert.equal(options.model, 'gpt-5-codex');
+});
+
 test('CLI failure NACKs; retry backoff skips execution', async () => {
   const h = harness(undefined, async () => { throw new Error('login required'); });
   assert.equal(await runOneShot({ env, ...h }), 'failed');
