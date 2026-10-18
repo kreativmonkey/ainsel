@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { execFile, spawn } from 'node:child_process';
 import test from 'node:test';
-import { buildPrompt, runOneShot, runtimeEnvironment, redactKnownSecrets, pullRequestContext } from './runner.mjs';
+import { buildPrompt, runOneShot, runtimeEnvironment, redactKnownSecrets, pullRequestContext, preparePullRequestWorkspace } from './runner.mjs';
 import * as codex from './executors/codex.mjs';
 
 const env = {
@@ -22,7 +26,7 @@ function harness(taskResponse = { status: 200, ok: true, json: async () => task 
     calls.push({ url, opts });
     return calls.length === 1 ? taskResponse : { ok: true, status: 202 };
   };
-  return { calls, fetcher, implementations: { codex: { runTask } } };
+  return { calls, fetcher, prepareWorkspace: async () => {}, implementations: { codex: { runTask } } };
 }
 
 test('successful task posts conversation and ACKs after CLI response', async () => {
@@ -181,5 +185,85 @@ test('PR event requires full immutable commit SHAs before fetching', async () =>
     await assert.rejects(pullRequestContext({ ...task, payload: { ...task.payload,
       pull_request: { number: 3, ...revision, head: { sha } },
     } }, { fetcher: () => assert.fail('must not fetch') }), /commit SHAs/);
+  }
+});
+
+
+test('verified PR checkout supplies exact source and base without git credentials or hooks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ainsel-pr-checkout-'));
+  const execute = promisify(execFile);
+  const source = join(root, 'source');
+  const cwd = join(root, 'workspace');
+  try {
+    await execute('git', ['init', '--template=', source]);
+    const git = (...args) => execute('git', ['-C', source, ...args]);
+    await writeFile(join(source, 'review.txt'), 'base');
+    await git('add', '.');
+    await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'base');
+    const base = (await git('rev-parse', 'HEAD')).stdout.trim();
+    await writeFile(join(source, 'review.txt'), 'exact head');
+    await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-am', 'head');
+    const head = (await git('rev-parse', 'HEAD')).stdout.trim();
+    await git('update-ref', 'refs/pull/3/head', head);
+    const actualTask = { ...task, payload: { ...task.payload, pull_request: {
+      number: 3, base: { sha: base }, head: { sha: head }, clone_url: 'https://evil.invalid/repo',
+    } } };
+    const calls = [];
+    const transport = async (command, args, options) => {
+      calls.push({ args, options });
+      assert.equal(command, 'git');
+      assert.deepEqual(Object.keys(options.env).sort(), ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_LFS_SKIP_SMUDGE', 'GIT_TERMINAL_PROMPT', 'PATH']);
+      assert.ok(args.includes('http.followRedirects=false'));
+      assert.ok(args.includes('core.hooksPath=/dev/null'));
+      // Substitute only transport in this test; execute real fetch, revision checks and checkout.
+      if (args.includes('fetch')) {
+        args = calls.at(-1).args.map(arg => arg === 'origin' ? source : arg);
+        args.unshift('-c', 'protocol.file.allow=always');
+      }
+      return execute(command, args, options);
+    };
+    await preparePullRequestWorkspace(actualTask, { cwd, execute: transport });
+    assert.equal(await readFile(join(cwd, 'review.txt'), 'utf8'), 'exact head');
+    assert.equal((await execute('git', ['-C', cwd, 'cat-file', '-t', base])).stdout.trim(), 'commit');
+    assert.equal((await execute('git', ['-C', cwd, 'remote', 'get-url', 'origin'])).stdout.trim(), 'https://github.com/owner/repo.git');
+    assert.equal(calls.some(({ args }) => args.some(arg => arg.includes('evil.invalid'))), false);
+    await assert.rejects(preparePullRequestWorkspace(actualTask, { cwd, execute: transport }), /must be empty/);
+    const mismatch = { ...actualTask, payload: { ...actualTask.payload, pull_request: { ...actualTask.payload.pull_request, head: { sha: 'c'.repeat(40) } } } };
+    await assert.rejects(preparePullRequestWorkspace(mismatch, { cwd: join(root, 'mismatch'), execute: transport }), /head changed/);
+    await assert.rejects(readFile(join(root, 'mismatch', 'review.txt')), /ENOENT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('checkout failure NACKs before CLI and preserves patch prompt on success', async () => {
+  const h = harness(undefined, () => assert.fail('must not execute after checkout failure'));
+  h.prepareWorkspace = async () => { throw new Error('GitHub PR head changed before checkout'); };
+  assert.equal(await runOneShot({ env, ...h }), 'failed');
+  assert.match(JSON.parse(h.calls[1].opts.body).error, /head changed/);
+  let prepared = false;
+  const success = harness(undefined, async ({ prompt }) => {
+    assert.equal(prepared, true);
+    assert.match(prompt, /<untrusted-pr-patch>/);
+    return { text: 'Review done' };
+  });
+  success.prepareWorkspace = async () => { prepared = true; };
+  assert.equal(await runOneShot({ env, ...success }), 'completed');
+});
+
+test('checkout does not expose transport diagnostics and rejects invalid identity before git', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'ainsel-pr-failure-'));
+  try {
+    await assert.rejects(preparePullRequestWorkspace(task, {
+      cwd, execute: async () => { throw new Error('credential-secret from remote output'); },
+    }), (error) => error.message === 'Failed to prepare GitHub PR workspace');
+    await assert.rejects(preparePullRequestWorkspace(task, {
+      repository: 'other/repo', cwd, execute: () => assert.fail('must not execute git'),
+    }), /not allowed/);
+    await preparePullRequestWorkspace({ headers: { type: 'cron' } }, {
+      cwd, execute: () => assert.fail('must not prepare non-PR workspace'),
+    });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
   }
 });
