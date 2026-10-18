@@ -7,7 +7,7 @@ const executors = { codex, claude };
 const codexDefaultModel = 'codex-cli-default';
 
 function configuredModel(engine, model) {
-  return engine === 'codex' && model === codexDefaultModel ? '' : model ?? '';
+  return engine === 'codex' && model === codexDefaultModel ? undefined : model;
 }
 
 function required(env, key) {
@@ -154,7 +154,8 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   try {
     const persona = env.AGENT_PERSONA_PATH ? await readPersona(env.AGENT_PERSONA_PATH, 'utf8') : '';
     const context = await pullRequestContext(task, { fetcher, repository: env.AINSEL_REVIEW_REPO, signal });
-    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd: '/workspace', model,
+    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd: '/workspace',
+      ...(model !== undefined ? { model } : {}),
       env: runtimeEnvironment(env), signal });
     if (!result?.text) throw new Error('Runtime produced no assistant response');
   } catch (error) {
@@ -166,7 +167,7 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   // Conversation persistence is best effort; task acknowledgement is authoritative.
   try {
     await post('/api/internal/task-messages', { ...meta, role: 'assistant', content: redactKnownSecrets(result.text, env),
-      model, inputTokens: result.usage?.input_tokens ?? 0,
+      model: model ?? '', inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0 });
   } catch { /* observability must not re-run an already completed CLI task */ }
   await post(`${path}/ack`);
