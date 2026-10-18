@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // MetadataConfig is the input for ProtectedResourceMetadataHandler.
 type MetadataConfig struct {
 	ResourceURL string // Externally-reachable MCP URL, e.g. https://ainsel.example.com/mcp
-	Issuer      string // Zitadel OIDC issuer URL — used only for scopes_supported; authorization_servers points to the proxy
-	ProjectID   string // Zitadel project ID — surfaces in scopes_supported
+	Issuer      string // Actual OIDC authorization server issuer
+	Scopes      string // Space-separated scopes; defaults to standard OIDC scopes
 }
 
 // ProtectedResourceMetadataHandler serves /.well-known/oauth-protected-resource
@@ -24,17 +25,12 @@ func ProtectedResourceMetadataHandler(cfg MetadataConfig) (http.Handler, error) 
 		ScopesSupported        []string `json:"scopes_supported"`
 	}{
 		Resource:               cfg.ResourceURL,
-		// Point at the MCP server itself as the authorization server so
-		// Claude Code discovers our registration_endpoint proxy instead
-		// of going directly to Zitadel (which has no DCR endpoint).
-		AuthorizationServers:   []string{cfg.ResourceURL},
+		AuthorizationServers:   []string{cfg.Issuer},
 		BearerMethodsSupported: []string{"header"},
-		ScopesSupported: []string{
-			"openid",
-			"profile",
-			"email",
-			fmt.Sprintf("urn:zitadel:iam:org:project:id:%s:aud", cfg.ProjectID),
-		},
+		ScopesSupported:        strings.Fields(cfg.Scopes),
+	}
+	if len(body.ScopesSupported) == 0 {
+		body.ScopesSupported = []string{"openid", "profile", "email", "offline_access"}
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {

@@ -84,7 +84,10 @@ observability:
 auth:
   oidcIssuer: ""
   oidcClientId: ""
-  oidcProjectId: ""
+  oidcAudience: ""
+  oidcSigningAlgs: "RS256"
+  oidcScopes: "openid profile email offline_access"
+  oidcRolesClaim: "groups"
   internalValidateSecret: ""
 
 forgejo:

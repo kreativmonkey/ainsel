@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth as useOidcAuth } from 'react-oidc-context'
 
-// Lands after Zitadel redirects back with ?code=…&state=…. react-oidc-context
+// Lands after the identity provider redirects back with ?code=…&state=…. react-oidc-context
 // processes the params automatically; we just wait for `isAuthenticated`
 // and bounce the user to the dashboard.
 export function Callback() {

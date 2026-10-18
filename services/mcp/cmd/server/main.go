@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,17 +40,31 @@ func main() {
 	}
 	log.Info("OIDC endpoints resolved via discovery", "jwks", jwksURL, "userinfo", userInfoURL)
 
+	metadataURL := ""
+	metadataPath := "/.well-known/oauth-protected-resource"
+	if cfg.MCPResourceURL != "" {
+		resource, err := url.Parse(cfg.MCPResourceURL)
+		if err != nil || resource.Host == "" || (resource.Scheme != "https" && resource.Scheme != "http") || resource.RawQuery != "" || resource.Fragment != "" {
+			log.Error("MCP_RESOURCE_URL must be an absolute HTTP(S) URL without query or fragment")
+			os.Exit(1)
+		}
+		metadataPath += strings.TrimRight(resource.Path, "/")
+		metadataURL = resource.Scheme + "://" + resource.Host + metadataPath
+	}
 	oidcMW, err := auth.NewMiddleware(auth.Config{
-		Issuer:      cfg.OIDCIssuer,
-		ProjectID:   cfg.OIDCProjectID,
-		JWKSURL:     jwksURL,
-		UserInfoURL: userInfoURL,
+		Issuer:              cfg.OIDCIssuer,
+		Audience:            cfg.OIDCAudience,
+		RolesClaim:          cfg.OIDCRolesClaim,
+		SigningAlgs:         cfg.OIDCSigningAlgs,
+		ResourceMetadataURL: metadataURL,
+		JWKSURL:             jwksURL,
+		UserInfoURL:         userInfoURL,
 	})
 	if err != nil {
 		log.Error("auth middleware init", "error", err)
 		os.Exit(1)
 	}
-	log.Info("OIDC auth enabled", "issuer", cfg.OIDCIssuer, "projectID", cfg.OIDCProjectID)
+	log.Info("OIDC auth enabled", "issuer", cfg.OIDCIssuer, "audience", cfg.OIDCAudience)
 
 	mw := auth.UserTokenMiddleware(cfg.HubURL, cfg.InternalValidateSecret, oidcMW)
 	if cfg.InternalValidateSecret != "" {
@@ -68,6 +84,21 @@ func main() {
 		_, _ = fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 	mux.Handle("/mcp", mw(handler))
+	if cfg.MCPResourceURL != "" {
+		metadata, err := auth.ProtectedResourceMetadataHandler(auth.MetadataConfig{
+			ResourceURL: cfg.MCPResourceURL,
+			Issuer:      cfg.OIDCIssuer,
+			Scopes:      os.Getenv("OIDC_SCOPES"),
+		})
+		if err != nil {
+			log.Error("OAuth protected resource metadata", "error", err)
+			os.Exit(1)
+		}
+		mux.Handle(metadataPath, metadata)
+		if metadataPath != "/.well-known/oauth-protected-resource" {
+			mux.Handle("/.well-known/oauth-protected-resource", metadata)
+		}
+	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Info("starting ainsel-mcp", "addr", addr)

@@ -632,7 +632,7 @@ func TestMiddleware_UserInfo_EnrichesUser(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sub":                "user-123",
 			"preferred_username": "dpinsel",
-			"email":             "dpinsel@example.com",
+			"email":              "dpinsel@example.com",
 		})
 	}))
 	defer userinfoSrv.Close()
@@ -839,11 +839,11 @@ func TestMiddleware_UserInfo_PreservesJWTClaims(t *testing.T) {
 
 	// First request with "admin" role
 	token1 := signedToken(t, key, kid, jwt.MapClaims{
-		"iss":     "https://issuer.example.com",
-		"aud":     "ainsel-hub",
-		"sub":     "user-123",
-		"exp":     time.Now().Add(5 * time.Minute).Unix(),
-		"iat":     time.Now().Unix(),
+		"iss":                               "https://issuer.example.com",
+		"aud":                               "ainsel-hub",
+		"sub":                               "user-123",
+		"exp":                               time.Now().Add(5 * time.Minute).Unix(),
+		"iat":                               time.Now().Unix(),
 		"urn:zitadel:iam:org:project:roles": map[string]any{"admin": map[string]any{}},
 	})
 
@@ -862,11 +862,11 @@ func TestMiddleware_UserInfo_PreservesJWTClaims(t *testing.T) {
 	// Second request with DIFFERENT role (user was granted "viewer" in new token)
 	// Cache hit should NOT replace roles from this JWT
 	token2 := signedToken(t, key, kid, jwt.MapClaims{
-		"iss":     "https://issuer.example.com",
-		"aud":     "ainsel-hub",
-		"sub":     "user-123",
-		"exp":     time.Now().Add(5 * time.Minute).Unix(),
-		"iat":     time.Now().Unix(),
+		"iss":                               "https://issuer.example.com",
+		"aud":                               "ainsel-hub",
+		"sub":                               "user-123",
+		"exp":                               time.Now().Add(5 * time.Minute).Unix(),
+		"iat":                               time.Now().Unix(),
 		"urn:zitadel:iam:org:project:roles": map[string]any{"viewer": map[string]any{}},
 	})
 
@@ -900,7 +900,7 @@ func TestFetchUserInfo_Success(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	result, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "my-token")
+	result, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "my-token", "user-123")
 	if err != nil {
 		t.Fatalf("FetchUserInfo: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestFetchUserInfo_ServerError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "tok")
+	_, err := oidc.FetchUserInfo(context.Background(), &http.Client{Timeout: 5 * time.Second}, srv.URL, "tok", "user-123")
 	if err == nil {
 		t.Fatal("expected error on server 500, got nil")
 	}
@@ -979,5 +979,41 @@ func TestClearUserInfoCacheEntry_ForcesReFetch(t *testing.T) {
 	makeReq() // cache miss — re-fetches
 	if callCount.Load() != 2 {
 		t.Fatalf("after eviction: want 2 calls, got %d", callCount.Load())
+	}
+}
+
+func TestMiddlewareConfiguredRolesClaim(t *testing.T) {
+	key := newRSAKey(t)
+	jwks := startJWKSServer(t, key, "groups-key")
+	mw, err := oidc.NewMiddleware(oidc.Config{
+		Issuer: "https://idp.test/application/o/app/", Audience: "app", JWKSURL: jwks.URL, RolesClaim: "groups",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := oidc.FromContext(r.Context())
+		if len(u.Roles) != 1 || u.Roles[0] != "Family" {
+			t.Errorf("roles = %v", u.Roles)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, audience := range []string{"app", "other-app"} {
+		token := signedToken(t, key, "groups-key", jwt.MapClaims{
+			"iss": "https://idp.test/application/o/app/", "aud": audience, "sub": "alice",
+			"exp": time.Now().Add(time.Minute).Unix(), "groups": []string{"Family"},
+			"urn:zitadel:iam:org:project:roles": map[string]any{"admin": map[string]any{}},
+		})
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		want := http.StatusOK
+		if audience != "app" {
+			want = http.StatusUnauthorized
+		}
+		if rec.Code != want {
+			t.Errorf("audience %s: status %d, want %d", audience, rec.Code, want)
+		}
 	}
 }

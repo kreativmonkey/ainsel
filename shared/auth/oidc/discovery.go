@@ -14,9 +14,11 @@ import (
 // (RFC 8414 / OpenID Connect Discovery 1.0) that the middleware needs to
 // locate the issuer's endpoints.
 type Discovery struct {
-	Issuer           string `json:"issuer"`
-	JWKSURI          string `json:"jwks_uri"`
-	UserInfoEndpoint string `json:"userinfo_endpoint"`
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
+	UserInfoEndpoint      string `json:"userinfo_endpoint"`
 }
 
 // FetchDiscovery retrieves and parses the OIDC discovery document at
@@ -52,6 +54,9 @@ func FetchDiscovery(ctx context.Context, client *http.Client, issuer string) (*D
 	var d Discovery
 	if err := json.Unmarshal(body, &d); err != nil {
 		return nil, fmt.Errorf("oidc discovery: parse: %w", err)
+	}
+	if d.Issuer != issuer {
+		return nil, fmt.Errorf("oidc discovery: issuer %q does not match configured issuer %q", d.Issuer, issuer)
 	}
 	if d.JWKSURI == "" {
 		return nil, fmt.Errorf("oidc discovery: jwks_uri missing in %s", url)

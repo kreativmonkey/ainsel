@@ -13,8 +13,8 @@
 
 ### Auth (OIDC)
 
-The chart renders the base auth vars (`HUB_AUTH_MODE`, `ZITADEL_ISSUER`,
-`OIDC_PROJECT_ID`, …) from `auth.*` values — see
+The chart renders the base auth vars (`HUB_AUTH_MODE`, `OIDC_ISSUER`,
+`OIDC_AUDIENCE`, `OIDC_SIGNING_ALGS`, `OIDC_ROLES_CLAIM`, …) from `auth.*` values — see
 [deployment.md](../../../docs/deployment.md) and the chart README. The
 endpoint overrides below have **no chart values**; set them as raw hub-backend
 pod env (e.g. `hub.extraEnv`):
@@ -23,6 +23,21 @@ pod env (e.g. `hub.extraEnv`):
 |----------|---------|-------------|
 | `OIDC_JWKS_URL` | _(unset)_ | Pin the JWKS endpoint, overriding the issuer's OIDC discovery document. Leave unset for standards-compliant IdPs. |
 | `OIDC_USERINFO_URL` | _(unset)_ | Pin the userinfo endpoint, overriding discovery. Hub backend only — the frontend login flow always uses discovery. |
+
+`OIDC_SIGNING_ALGS` is a comma-separated allowlist (default `RS256`):
+`RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`,
+`ES512`, and `EdDSA` are supported; `HS*`, `none`, and unknown values fail
+startup. Tokens must be JWT access tokens; opaque-token introspection is
+not supported. Discovery must report the exact configured issuer, and
+userinfo must match the validated token's `sub` before claims are used.
+
+`OIDC_ROLES_CLAIM` defaults to `urn:zitadel:iam:org:project:roles` for existing
+Zitadel installations. Configure `groups` or a nested path such as
+`realm_access.roles` for other providers; exact claim keys take precedence
+over dotted paths. Roles are informational: hub database records determine
+permissions. `ZITADEL_ISSUER` and `OIDC_PROJECT_ID` remain aliases; neutral
+variables take precedence, and an unset audience falls back to the legacy
+project ID before the client ID.
 
 ## Helm Values
 

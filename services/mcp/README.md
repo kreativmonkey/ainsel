@@ -76,11 +76,11 @@ make build
 # Or directly:
 go build -o bin/ainsel-mcp ./cmd/server
 
-# Run (OIDC_ISSUER and OIDC_PROJECT_ID are required; HUB_URL defaults
+# Run (OIDC_ISSUER and OIDC_AUDIENCE are required; HUB_URL defaults
 # to the in-cluster hub)
 PORT=8080 \
 OIDC_ISSUER=https://oidc.example.com \
-OIDC_PROJECT_ID=<your-project-id> \
+OIDC_AUDIENCE=<your-token-audience> \
 OIDC_CLIENT_ID=<your-pkce-client-id> \
 MCP_RESOURCE_URL=http://localhost:8080 \
 HUB_URL=http://localhost:8080 \
@@ -93,10 +93,24 @@ Ports:
 - `8080` — HTTP server hosting `/mcp` and `/health` (`PORT`)
 
 Env vars (see [`internal/config/config.go`](internal/config/config.go)):
-`PORT`, `OIDC_ISSUER` (required), `OIDC_PROJECT_ID` (required),
-`OIDC_CLIENT_ID`, `MCP_RESOURCE_URL`, `HUB_URL`,
+`PORT`, `OIDC_ISSUER` (required), `OIDC_AUDIENCE` (required),
+`OIDC_CLIENT_ID`, `OIDC_SIGNING_ALGS`, `OIDC_ROLES_CLAIM`, `OIDC_SCOPES`,
+`MCP_RESOURCE_URL`, `HUB_URL`,
 `INTERNAL_VALIDATE_SECRET`. The server only needs `HUB_URL` to reach the
 hub; Prometheus is accessed through the hub.
+
+OIDC requires JWT access tokens, a matching discovery issuer and audience,
+and a public authorization-code client with PKCE for interactive login.
+`OIDC_SIGNING_ALGS` is a comma-separated allowlist (default `RS256`), with
+`RS256/384/512`, `PS256/384/512`, `ES256/384/512`, and `EdDSA` supported.
+`HS*`, `none`, and unknown algorithms fail startup; opaque-token
+introspection is not supported. Userinfo claims require a matching `sub`.
+`OIDC_ROLES_CLAIM` defaults to `urn:zitadel:iam:org:project:roles`; configure
+`groups` or a nested path such as `realm_access.roles` for other providers.
+Exact keys take precedence over dotted paths, and roles are informational.
+The legacy `ZITADEL_ISSUER` / `OIDC_PROJECT_ID` aliases remain supported;
+audience fallback prefers the project ID over the client ID. See the
+[provider setup guide](../../docs/deployment.md#oidc-organization-sso).
 
 ## Testing
 

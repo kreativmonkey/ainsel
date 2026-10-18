@@ -1,28 +1,31 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/ainsel-project/ainsel/shared/auth/oidc"
 )
 
 // ProxyConfig configures the OAuth proxy auth server handlers.
 // The proxy advertises itself as the authorization server so it can
 // expose a registration_endpoint that Claude Code requires for DCR.
-// It returns a pre-registered Zitadel PKCE client_id to all DCR
-// requests, then proxies all real auth endpoints to Zitadel.
+// It returns a pre-registered OIDC provider PKCE client_id to all DCR
+// requests, then proxies all real auth endpoints to OIDC provider.
 type ProxyConfig struct {
 	// ProxyIssuer is the externally-reachable URL of the MCP server,
 	// used as the "issuer" in the synthetic OpenID configuration.
 	// e.g. https://ainsel.example.com/mcp
 	ProxyIssuer string
 
-	// ZitadelIssuer is the real Zitadel issuer URL.
+	// Issuer is the real OIDC provider issuer URL.
 	// e.g. https://oidc.example.com
-	ZitadelIssuer string
+	Issuer string
 
-	// ClientID is the pre-registered Zitadel PKCE application client ID
+	// ClientID is the pre-registered OIDC provider PKCE application client ID
 	// returned to all Dynamic Client Registration requests.
 	ClientID string
 }
@@ -30,14 +33,23 @@ type ProxyConfig struct {
 // OIDCConfigHandler serves /.well-known/openid-configuration.
 // It returns a synthetic OpenID Connect discovery document that:
 //   - advertises the MCP server as the issuer (so Claude Code finds the registration_endpoint)
-//   - points authorization_endpoint, token_endpoint, jwks_uri at the real Zitadel
+//   - points authorization_endpoint, token_endpoint, jwks_uri at the real OIDC provider
 //   - includes a registration_endpoint pointing back at this server
 //
 // Claude Code will do DCR against registration_endpoint, get the pre-registered
-// client_id, then do PKCE authorization code flow directly with Zitadel.
-// The resulting token is a real Zitadel JWT that the existing OIDC middleware
+// client_id, then do PKCE authorization code flow directly with OIDC provider.
+// The resulting token is a real OIDC provider JWT that the existing OIDC middleware
 // validates without any changes.
 func OIDCConfigHandler(cfg ProxyConfig) (http.Handler, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	discovery, err := oidc.FetchDiscovery(ctx, nil, cfg.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" {
+		return nil, fmt.Errorf("OIDC discovery requires authorization_endpoint and token_endpoint")
+	}
 	body := struct {
 		Issuer                            string   `json:"issuer"`
 		AuthorizationEndpoint             string   `json:"authorization_endpoint"`
@@ -52,10 +64,10 @@ func OIDCConfigHandler(cfg ProxyConfig) (http.Handler, error) {
 		CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	}{
 		Issuer:                            cfg.ProxyIssuer,
-		AuthorizationEndpoint:             cfg.ZitadelIssuer + "/oauth/v2/authorize",
-		TokenEndpoint:                     cfg.ZitadelIssuer + "/oauth/v2/token",
-		JwksURI:                           cfg.ZitadelIssuer + "/oauth/v2/keys",
-		UserinfoEndpoint:                  cfg.ZitadelIssuer + "/oidc/v1/userinfo",
+		AuthorizationEndpoint:             discovery.AuthorizationEndpoint,
+		TokenEndpoint:                     discovery.TokenEndpoint,
+		JwksURI:                           discovery.JWKSURI,
+		UserinfoEndpoint:                  discovery.UserInfoEndpoint,
 		RegistrationEndpoint:              cfg.ProxyIssuer + "/oauth/register",
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
@@ -86,9 +98,9 @@ func OAuthASMetadataHandler(cfg ProxyConfig) (http.Handler, error) {
 
 // DCRHandler serves POST /oauth/register.
 // It implements just enough of RFC 7591 Dynamic Client Registration to satisfy
-// Claude Code: it always returns the pre-registered Zitadel PKCE client_id
+// Claude Code: it always returns the pre-registered OIDC provider PKCE client_id
 // regardless of the registration request body. No actual client is created —
-// the real Zitadel application was registered in advance.
+// the real OIDC provider application was registered in advance.
 func DCRHandler(cfg ProxyConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

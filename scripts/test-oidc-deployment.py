@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Exercise OIDC deployment contracts with real shell, MCP and Helm."""
+
+import json
+import os
+from pathlib import Path
+import shlex
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def response(url):
+    try:
+        with urlopen(url, timeout=2) as result:
+            return result.status, result.headers, result.read()
+    except HTTPError as error:
+        return error.code, error.headers, error.read()
+
+
+def ready(url, process):
+    for _ in range(100):
+        if process.poll() is not None:
+            raise AssertionError(f"service exited: {process.stderr.read().decode()}")
+        try:
+            response(url)
+            return
+        except (URLError, TimeoutError):
+            time.sleep(0.05)
+    raise AssertionError("service did not become ready")
+
+
+class DeploymentTests(unittest.TestCase):
+    def test_frontend_runtime_config(self):
+        source = (ROOT / "frontend/docker-entrypoint-runtime-config.sh").read_text()
+        with tempfile.TemporaryDirectory() as temp:
+            script = source.replace("ROOT=/usr/share/nginx/html", "ROOT=" + shlex.quote(temp))
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("AUTH_MODE", "OIDC_", "ZITADEL_", "FORGEJO_"))}
+            env.update(AUTH_MODE="oidc", OIDC_ISSUER="https://idp.test/application/o/app/", OIDC_CLIENT_ID="app", OIDC_SCOPES="openid profile email offline_access")
+            subprocess.run(["sh", "-c", script], env=env, check=True, capture_output=True)
+            output = subprocess.check_output(["node", "-e", "const fs=require('fs'),vm=require('vm'); const ctx={window:{}}; vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),ctx); console.log(JSON.stringify(ctx.window.__AINSEL_CONFIG__));", str(Path(temp) / "runtime-config.js")])
+            config = json.loads(output)
+            self.assertEqual(config["authMode"], "oidc")
+            self.assertEqual(config["oidcProjectId"], "")
+            self.assertEqual(config["oidcScopes"], env["OIDC_SCOPES"])
+            env.pop("OIDC_CLIENT_ID")
+            for mode in ("oidc", ""):
+                env["AUTH_MODE"] = mode
+                result = subprocess.run(["sh", "-c", script], env=env, capture_output=True)
+                self.assertNotEqual(result.returncode, 0, "partial config must fail closed")
+
+    def test_mcp_discovery_and_challenge(self):
+        class Provider(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                if self.path.endswith("openid-configuration"):
+                    self.wfile.write(json.dumps({"issuer": f"http://127.0.0.1:{self.server.server_port}/provider/", "jwks_uri": f"http://127.0.0.1:{self.server.server_port}/custom/keys"}).encode())
+                else:
+                    self.wfile.write(b'{"keys":[]}')
+
+            def log_message(self, *_args):
+                pass
+
+        provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+        threading.Thread(target=provider.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                binary = str(Path(temp, "mcp"))
+                subprocess.run(["go", "build", "-o", binary, "./cmd/server"], cwd=ROOT / "services/mcp", check=True)
+                listen = port()
+                env = {**os.environ, "PORT": str(listen), "OIDC_ISSUER": f"http://127.0.0.1:{provider.server_port}/provider/", "OIDC_AUDIENCE": "app", "OIDC_PROJECT_ID": "", "OIDC_CLIENT_ID": "app", "OIDC_SIGNING_ALGS": "RS256", "MCP_RESOURCE_URL": "https://app.test/mcp", "OIDC_SCOPES": "openid email offline_access", "INTERNAL_VALIDATE_SECRET": ""}
+                process = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                try:
+                    root = f"http://127.0.0.1:{listen}"
+                    ready(root + "/health", process)
+                    status, _, data = response(root + "/.well-known/oauth-protected-resource/mcp")
+                    self.assertEqual(status, 200)
+                    metadata = json.loads(data)
+                    self.assertEqual(metadata["authorization_servers"], [env["OIDC_ISSUER"]])
+                    self.assertEqual(metadata["scopes_supported"], ["openid", "email", "offline_access"])
+                    status, headers, _ = response(root + "/mcp")
+                    self.assertEqual(status, 401)
+                    self.assertIn('resource_metadata="https://app.test/.well-known/oauth-protected-resource/mcp"', headers["WWW-Authenticate"])
+                finally:
+                    process.terminate()
+                    process.wait(timeout=5)
+                    process.stderr.close()
+        finally:
+            provider.shutdown()
+            provider.server_close()
+
+    def test_chart_generic_oidc(self):
+        args = ["helm", "template", "chart/", "--set", "auth.mode=oidc", "--set", "auth.oidcIssuer=https://idp.test/provider/", "--set", "auth.oidcClientId=app", "--set", "mcp.enabled=true", "--set", "mcp.externalUrl=https://app.test/mcp"]
+        rendered = subprocess.check_output(args, cwd=ROOT, text=True)
+        self.assertIn('name: OIDC_AUDIENCE\n              value: "app"', rendered)
+        self.assertIn('value: "openid profile email offline_access"', rendered)
+        self.assertNotIn('urn:zitadel:iam:org:project:id:', rendered)
+        result = subprocess.run(args + ["--set", "auth.oidcClientId="], cwd=ROOT, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, "OIDC without an audience must fail rendering")
+
+    def test_chart_oidc_validation_settings(self):
+        args = ["helm", "template", "chart/", "--set", "auth.mode=oidc", "--set", "auth.oidcIssuer=https://idp.test/provider/", "--set", "auth.oidcClientId=app", "--set", "mcp.enabled=true"]
+
+        def deployments(rendered):
+            return [document for document in rendered.split("\n---\n")
+                    if "kind: Deployment\n" in document and
+                    ("  name: hub-backend\n" in document or "  name: ainsel-mcp\n" in document)]
+
+        for settings, audience, algorithms, roles, scopes in (
+            ([], "app", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
+            (["--set", "auth.oidcSigningAlgs="], "app", "", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
+            (["--set", "auth.oidcProjectId=legacy-project"], "legacy-project", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email urn:zitadel:iam:org:project:id:legacy-project:aud"),
+            (["--set", "auth.oidcProjectId=legacy-project", "--set", "auth.oidcAudience=api", "--set", r"auth.oidcSigningAlgs=RS256\,ES256", "--set", "auth.oidcRolesClaim=realm_access.roles", "--set", "auth.oidcScopes=openid email custom:audience"], "api", "RS256,ES256", "realm_access.roles", "openid email custom:audience"),
+        ):
+            with self.subTest(audience=audience, algorithms=algorithms):
+                rendered = subprocess.check_output(args + settings, cwd=ROOT, text=True)
+                manifests = deployments(rendered)
+                self.assertEqual(len(manifests), 2)
+                for manifest in manifests:
+                    for name, value in (("OIDC_AUDIENCE", audience), ("OIDC_SIGNING_ALGS", algorithms), ("OIDC_ROLES_CLAIM", roles)):
+                        self.assertIn(f'name: {name}\n              value: "{value}"', manifest)
+                self.assertEqual(rendered.count(f'name: OIDC_SCOPES\n              value: "{scopes}"'), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
