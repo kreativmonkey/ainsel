@@ -96,17 +96,29 @@ type AgentMCP struct {
 // nil/empty distinction: entries *merge* over the referenced image's Env by
 // name instead of replacing it, so "not configured" and "explicitly none"
 // mean the same thing — run on the profile's defaults.
+// +kubebuilder:validation:XValidation:rule="!has(self.valueFrom) || !has(self.value) || size(self.value) == 0",message="value and valueFrom are mutually exclusive"
 type AgentEnvVar struct {
 	// Name is the environment variable name. Matching a name in the
 	// referenced image's Env overrides that value for this agent.
 	Name string `json:"name"`
-	// Value is the variable's value.
-	Value string `json:"value"`
+	// Value is the variable's literal value.
+	// +optional
+	Value string `json:"value,omitempty"`
+	// ValueFrom references an existing Secret in the Agent namespace. The
+	// operator passes the reference directly to the pod without reading it.
+	// +optional
+	ValueFrom *AgentEnvVarSource `json:"valueFrom,omitempty"`
 	// Secret marks Value as sensitive: the hub API masks it on read, and an
 	// empty Value on write means "keep the existing value" — the same
 	// contract as AgentImageEnvVar.
 	// +optional
 	Secret bool `json:"secret,omitempty"`
+}
+
+// AgentEnvVarSource selects a key from an existing, separately managed Secret.
+// +kubebuilder:validation:XValidation:rule="has(self.secretKeyRef.name) && size(self.secretKeyRef.name) > 0 && size(self.secretKeyRef.key) > 0",message="secretKeyRef requires a non-empty name and key"
+type AgentEnvVarSource struct {
+	SecretKeyRef corev1.SecretKeySelector `json:"secretKeyRef"`
 }
 
 // AgentRuntime holds operator-managed runtime configuration for the agent pod.

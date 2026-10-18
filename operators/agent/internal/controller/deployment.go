@@ -417,6 +417,13 @@ func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName s
 			// entry (added later, wins in k8s) from overriding it.
 			continue
 		}
+		if e.ValueFrom != nil {
+			envs = append(envs, corev1.EnvVar{Name: e.Name, ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: e.ValueFrom.SecretKeyRef.DeepCopy(),
+			}})
+			imageEnvNames[e.Name] = true
+			continue
+		}
 		envs = append(envs, corev1.EnvVar{
 			Name: e.Name,
 			ValueFrom: &corev1.EnvVarSource{

@@ -1,15 +1,20 @@
 package controller
 
 import (
+	"context"
 	"slices"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	ainselv1alpha1 "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
 )
 
 // envNames flattens an env list to "name=value" pairs so assertions read as
 // the merge result rather than as struct comparisons.
-func envPairs(in []ainselv1alpha1.AgentImageEnvVar) []string {
+func envPairs(in []ainselv1alpha1.AgentEnvVar) []string {
 	out := make([]string, 0, len(in))
 	for _, e := range in {
 		out = append(out, e.Name+"="+e.Value)
@@ -105,4 +110,38 @@ func TestEffectiveEnv(t *testing.T) {
 			t.Errorf("got %v, want empty", envPairs(got))
 		}
 	})
+}
+
+func TestAgentSecretKeyReference(t *testing.T) {
+	t.Setenv("HUB_INTERNAL_VALIDATE_SECRET", "platform-token")
+	agent := jobModeAgent(5, 1, 2)
+	source := &ainselv1alpha1.AgentEnvVarSource{SecretKeyRef: corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "github-token"}, Key: "token",
+	}}
+	agent.Spec.Env = []ainselv1alpha1.AgentEnvVar{{Name: "GH_TOKEN", ValueFrom: source}, {Name: "HUB_INTERNAL_VALIDATE_SECRET", ValueFrom: source}}
+	agent.Spec.MCP = &ainselv1alpha1.AgentMCP{Servers: []ainselv1alpha1.AgentMCPServer{{Name: "github", URL: "http://github", TokenFromEnv: "GH_TOKEN"}}}
+	image := &ainselv1alpha1.AgentImage{Spec: ainselv1alpha1.AgentImageSpec{Env: []ainselv1alpha1.AgentImageEnvVar{{Name: "GH_TOKEN", Value: "old-token"}}}}
+	r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).Build(), Scheme: jobModeScheme()}
+	if err := r.reconcileImageEnvSecret(context.Background(), agent, "agent-test", image); err != nil {
+		t.Fatal(err)
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: agent.Namespace, Name: "agent-test-image-env"}, secret); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := secret.Data["GH_TOKEN"]; ok {
+		t.Fatal("external secret reference copied into managed secret")
+	}
+	plan := newPodPlan(agent, "agent-test", image)
+	env := buildAgentEnv(context.Background(), agent, "agent-test", image, plan)
+	got := findEnvVar(env, "GH_TOKEN")
+	if got == nil || got.ValueFrom == nil || got.ValueFrom.SecretKeyRef.Name != "github-token" || got.ValueFrom.SecretKeyRef.Key != "token" {
+		t.Fatalf("unexpected GH_TOKEN reference: %+v", got)
+	}
+	if hub := findEnvVar(env, "HUB_INTERNAL_VALIDATE_SECRET"); hub == nil || hub.ValueFrom != nil {
+		t.Fatal("reference overrode platform-owned environment")
+	}
+	if len(plan.missingEnv) != 0 {
+		t.Fatal("external secret reference unavailable to MCP token substitution")
+	}
 }

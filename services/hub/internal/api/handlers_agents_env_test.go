@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	agentv1alpha1 "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -253,5 +254,41 @@ func TestAgentEnv_RejectsInvalidEntries(t *testing.T) {
 				t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestAgentEnv_ExternalReferenceCannotBeReplacedViaAPI(t *testing.T) {
+	s := envAgentServer(t)
+	created := createAgentWithEnv(t, s, nil)
+	agent := storedAgent(t, s, created.ID)
+	agent.Spec.Env = []agentv1alpha1.AgentEnvVar{{Name: "GH_TOKEN", ValueFrom: &agentv1alpha1.AgentEnvVarSource{
+		SecretKeyRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "external-secret"}, Key: "private-key"},
+	}}}
+	if err := s.client.Update(context.Background(), agent); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.ID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("external-secret")) || bytes.Contains(rec.Body.Bytes(), []byte("private-key")) {
+		t.Fatal("API exposed external reference")
+	}
+	var response SimpleAgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Env) != 1 || !response.Env[0].Secret || response.Env[0].Value != "" {
+		t.Fatal("external reference not masked")
+	}
+	for _, env := range [][]AgentImageEnvVarInfo{response.Env, {}} {
+		update := putAgentEnv(t, s, created.ID, env)
+		if update.Code != http.StatusBadRequest {
+			t.Fatalf("env overwrite: %d %s", update.Code, update.Body.String())
+		}
+	}
+	if got := storedAgent(t, s, created.ID); got.Spec.Env[0].ValueFrom == nil {
+		t.Fatal("API removed external reference")
 	}
 }
