@@ -28,7 +28,8 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get"]
+    # Cached Get starts an informer, which must list and watch PVC objects.
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "create", "delete"]

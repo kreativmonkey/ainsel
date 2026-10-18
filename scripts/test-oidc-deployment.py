@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import socket
@@ -45,6 +46,24 @@ def ready(url, process):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_agent_operator_pvc_cache_permissions(self):
+        rendered = subprocess.check_output([
+            "helm", "template", "ainsel", "chart/", "--show-only",
+            "templates/k8s-ai-agent-operator/role.yaml",
+        ], cwd=ROOT, text=True)
+        self.assertIn("kind: Role\n", rendered)
+        self.assertIn("namespace: ainsel\n", rendered)
+        # Helm emits JSON-compatible flow sequences for these rule fields.
+        rules = [dict((key, json.loads(value)) for key, value in
+                      re.findall(r'(apiGroups|resources|verbs): (\[[^\n]+\])', rule))
+                 for rule in rendered.split("  - ")[1:]]
+        pvc_rules = [rule for rule in rules
+                     if "persistentvolumeclaims" in rule.get("resources", [])]
+        self.assertEqual(len(pvc_rules), 1)
+        self.assertEqual(pvc_rules[0]["apiGroups"], [""])
+        self.assertEqual(pvc_rules[0]["resources"], ["persistentvolumeclaims"])
+        self.assertEqual(set(pvc_rules[0]["verbs"]), {"get", "list", "watch"})
+
     def test_frontend_runtime_config(self):
         source = (ROOT / "frontend/docker-entrypoint-runtime-config.sh").read_text()
         with tempfile.TemporaryDirectory() as temp:
