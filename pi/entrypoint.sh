@@ -74,6 +74,11 @@ AGENT_MD_PATH="$(dirname "$PERSONA_PATH")/AGENT.md"
 
 set --
 set -- --mode rpc --no-session
+# Review agents expose only the runner's scoped immutable repository reader.
+# Keep untrusted repository resources from becoming executable extensions or skills.
+if [ -n "${AINSEL_REVIEW_REPO:-}" ]; then
+  set -- "$@" --no-tools --no-extensions --no-skills --no-prompt-templates
+fi
 [ -r "$PERSONA_PATH" ] && set -- "$@" --append-system-prompt "$PERSONA_PATH"
 [ -r "$AGENT_MD_PATH" ] && set -- "$@" --append-system-prompt "$AGENT_MD_PATH"
 
@@ -81,6 +86,9 @@ set -- --mode rpc --no-session
 # loading them all before any session_start handler fires.
 for ext in /usr/local/share/pi-extensions/*/index.ts; do
   [ -r "$ext" ] || continue
+  if [ -n "${AINSEL_REVIEW_REPO:-}" ]; then
+    case "$ext" in */ainsel-mcp/*) continue ;; esac
+  fi
   set -- "$@" --extension "$ext"
 done
 

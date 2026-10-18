@@ -175,3 +175,32 @@ not a breach).
 - **Conversation history is stripped between events.** The `context`
   hook trims messages before the latest `<event>` block so each turn
   starts fresh.
+
+### Public GitHub PR review mode
+
+Set `AINSEL_REVIEW_REPO=owner/repository` to make this agent a dedicated PR
+reviewer. Only `pull_request` tasks for that repository are accepted. The runtime
+fetches metadata and a bounded patch from the canonical public GitHub API without
+credentials, verifies webhook head/base SHAs before and after the patch fetch,
+and creates `/workspace/repository` owned by the runtime UID. Git fetches use
+HTTPS only, no credential helper, hooks, inherited config, or recursive submodules.
+The checked-out head and fetched base must match the webhook's immutable SHAs.
+A stale event, oversized response, fetch error, or failed checkout NACKs the task
+before the model starts.
+
+The model receives only `ainsel_review_repository`, supporting `list`, `read`,
+`search`, and `diff`. Reads use verified Git blob IDs, not filesystem paths;
+symlinks and submodules are excluded. The reader cannot access OAuth `auth.json`,
+mounted secrets, `.git/config`, arbitrary URLs, or a shell. Every other tool call
+(including MCP) is blocked. The entrypoint disables ordinary tools and resource
+discovery and skips the MCP extension in this mode. Findings go to the AInsel
+transcript; publishing a GitHub review is a separate trusted action.
+
+Tools paginate their results. Reads are limited to 512 KiB per file; literal
+search scans 25 files per page and explicitly skips binary files and files above
+64 KiB. Diff operations fail rather than silently truncating output above 1 MiB.
+Review agents can inspect the full regular source tree but cannot run tests or
+builds. Repository content remains untrusted and can influence findings; this
+mode restricts the model's capabilities rather than promising prompt injection
+immunity. The runtime itself retains credentials for its provider and hub and
+must remain trusted. This tool boundary is not an OS sandbox for arbitrary code.
