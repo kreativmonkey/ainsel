@@ -363,6 +363,11 @@ func (r *AgentReconciler) reconcilePiModelsConfigMap(ctx context.Context, agent 
     }%s
 }`, pp.Name, apiKeyRef, pp.BaseURL, providerCompatBlock, agent.Spec.LLM.Model, contextWindow, input, pp.Compat, thinkingLevelMapBlock, modelCompatBlock, costBlock, ainselBlock)
 
+	if piSubscription(agent) {
+		// Keep the built-in Responses/OAuth provider and its model catalog.
+		modelsJSON = fmt.Sprintf(`{"providers": {}%s}`, ainselBlock)
+	}
+
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      agentName + "-pi-models",

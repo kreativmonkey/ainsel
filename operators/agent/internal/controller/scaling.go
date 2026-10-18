@@ -35,7 +35,7 @@ type ScaleDecision struct {
 func concurrencyCap(agent *ainselv1alpha1.Agent) int32 {
 	if agent.Spec.Scaling != nil && agent.Spec.Scaling.Replicas != nil {
 		limit := *agent.Spec.Scaling.Replicas
-		if nativeRuntime(agent) && limit > 1 {
+		if subscriptionRuntime(agent) && limit > 1 {
 			return 1
 		}
 		return limit

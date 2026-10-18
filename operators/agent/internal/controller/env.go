@@ -41,6 +41,8 @@ type piProviderConfig struct {
 // otherwise defaults to ollama-cloud for backwards compatibility.
 func resolvePiProvider(agent *ainselv1alpha1.Agent) piProviderConfig {
 	switch agent.Spec.LLM.Provider {
+	case "openai-codex":
+		return piProviderConfig{Name: "openai-codex"}
 	case ainselv1alpha1.AgentLLMProviderOpenCode:
 		return piProviderConfig{
 			Name:      "opencode",

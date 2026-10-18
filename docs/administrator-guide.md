@@ -800,3 +800,14 @@ authentication, the complete tool reference, and example conversations.
 - [`adding-memory.md`](adding-memory.md) — give agents persistent memory
   with the self-hosted mem0 REST API.
 - [`architecture.md`](architecture.md) — technical deep-dive.
+
+### ChatGPT subscriptions with Pi
+
+Select the Pi runtime and enable **ChatGPT subscription** in the agent form.
+Choose an existing dedicated `ReadWriteOncePod` credential PVC, a built-in
+Codex model and login mode, then save. The provider is `openai-codex`.
+Use the [Pi login procedure](crd-reference.md#pi-with-a-chatgpt-subscription)
+to sign in, then disable login mode to resume queued tasks. The Pi runtime
+retains its tools, persona and skills; the PVC preserves Pi authentication
+between task Jobs. This uses the existing namespace and needs no separate
+worker node. The console continues to use its existing authentication.

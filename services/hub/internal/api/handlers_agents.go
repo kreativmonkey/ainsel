@@ -147,9 +147,10 @@ func runtimeProblem(runtime *AgentRuntimeInfo) string {
 	}
 	switch runtime.Engine {
 	case "", "pi":
-		if runtime.Subscription != nil {
-			return "subscription requires the codex or claude runtime"
+		if runtime.Subscription == nil {
+			return ""
 		}
+		fallthrough
 	case "codex", "claude":
 		if runtime.Subscription == nil || runtime.Subscription.ClaimName == "" {
 			return "subscription credential claimName is required"
@@ -159,6 +160,21 @@ func runtimeProblem(runtime *AgentRuntimeInfo) string {
 		}
 	default:
 		return "runtime engine must be pi, codex or claude"
+	}
+	return ""
+}
+
+// Pi subscriptions use the built-in Codex OAuth provider and its credential store.
+func piSubscriptionProblem(runtime *AgentRuntimeInfo, provider string) string {
+	if runtime != nil && runtime.Engine != "" && runtime.Engine != "pi" {
+		return ""
+	}
+	hasSubscription := runtime != nil && runtime.Subscription != nil
+	if provider == "openai-codex" && !hasSubscription {
+		return "Pi openai-codex requires subscription credential claimName"
+	}
+	if hasSubscription && provider != "openai-codex" {
+		return "Pi subscription requires llm.provider openai-codex"
 	}
 	return ""
 }
@@ -709,6 +725,11 @@ func (s *Server) createAgent(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 
+	if problem := piSubscriptionProblem(req.Runtime, req.LLM.Provider); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+
 	imageDisplayName, code, msg := s.validateAgentImageRef(ctx, req.ImageRef.Name, req.EnabledTools)
 	if code != 0 {
 		http.Error(w, msg, code)
@@ -939,6 +960,19 @@ func (s *Server) updateAgent(ctx context.Context, w http.ResponseWriter, r *http
 	}
 
 	if problem := runtimeProblem(req.Runtime); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+
+	effectiveRuntime := req.Runtime
+	if effectiveRuntime == nil {
+		effectiveRuntime = &AgentRuntimeInfo{Engine: existing.Spec.Runtime.Engine, Subscription: existing.Spec.Runtime.Subscription}
+	}
+	effectiveProvider := existing.Spec.LLM.Provider
+	if req.LLM != nil && req.LLM.Provider != "" {
+		effectiveProvider = req.LLM.Provider
+	}
+	if problem := piSubscriptionProblem(effectiveRuntime, effectiveProvider); problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
 		return
 	}

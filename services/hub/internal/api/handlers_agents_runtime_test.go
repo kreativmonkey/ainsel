@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	agentv1alpha1 "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -52,5 +53,21 @@ func TestAgentSubscriptionRuntimeRoundTrip(t *testing.T) {
 		`{"runtime":{"engine":"pi","subscription":{"claimName":"private-home"}}}`,
 	} {
 		call(http.MethodPut, path, body, 400)
+	}
+}
+
+func TestPiSubscriptionProviderValidation(t *testing.T) {
+	pi := &AgentRuntimeInfo{Engine: "pi", Subscription: &agentv1alpha1.AgentSubscription{ClaimName: "pi-auth"}}
+	if got := runtimeProblem(pi); got != "" {
+		t.Fatal(got)
+	}
+	if got := piSubscriptionProblem(pi, "openai-codex"); got != "" {
+		t.Fatal(got)
+	}
+	if piSubscriptionProblem(pi, "ollama-cloud") == "" {
+		t.Fatal("Pi subscription accepted API-key provider")
+	}
+	if piSubscriptionProblem(nil, "openai-codex") == "" {
+		t.Fatal("Codex subscription accepted without auth PVC")
 	}
 }
