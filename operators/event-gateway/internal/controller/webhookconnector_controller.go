@@ -331,7 +331,7 @@ func (r *WebhookConnectorReconciler) reconcileWebhookIngress(ctx context.Context
 		if r.ConnectorIngressMode == "nginx-inc-minion" {
 			ing.Annotations = map[string]string{
 				"nginx.org/mergeable-ingress-type": "minion",
-				"nginx.org/rewrite-target":         "/publish",
+				"nginx.org/rewrites":               "serviceName=" + svcName + " rewrite=/publish",
 			}
 			// The externally managed Master owns TLS and host-level redirects.
 			ing.Spec.TLS = nil

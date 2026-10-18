@@ -397,9 +397,12 @@ chart passes `CONNECTOR_INGRESS_MODE`; empty or unset keeps the existing
 `ingress-nginx` behavior. Unsupported values stop operator startup.
 
 Minion mode creates connector Ingresses with F5's mergeable Minion annotation
-and `nginx.org/rewrite-target: /publish`, preserving the exact webhook path and
-backend. TLS and HTTPS redirects belong to an externally managed Master; the
-operator omits them from Minions. Existing Ingresses update on operator startup.
+and `nginx.org/rewrites: "serviceName=<connector-service> rewrite=/publish"`,
+preserving the exact webhook path and backend. This uses F5's `proxy_pass` URI
+rewrite, avoiding invalid `rewrite` directives generated for exact paths by
+`nginx.org/rewrite-target` on F5 NGINX Ingress Controller 5.5.4. TLS and HTTPS
+redirects belong to an externally managed Master; the operator omits them from
+Minions. Existing Ingresses update on operator startup.
 
 Before enabling it, configure one F5 Master per webhook hostname with the same
 `nginx` Ingress class, the TLS certificate, and no paths. Move existing UI/API
