@@ -275,10 +275,7 @@ func effectiveMCPServers(agent *ainselv1alpha1.Agent, img *ainselv1alpha1.AgentI
 // variables the profile does not define. Image order is preserved and agent-only
 // names keep their request order, which keeps the rendered Secret and env list
 // stable across reconciles.
-func effectiveEnv(agent *ainselv1alpha1.Agent, img *ainselv1alpha1.AgentImage) []ainselv1alpha1.AgentImageEnvVar {
-	if len(agent.Spec.Env) == 0 {
-		return img.Spec.Env
-	}
+func effectiveEnv(agent *ainselv1alpha1.Agent, img *ainselv1alpha1.AgentImage) []ainselv1alpha1.AgentEnvVar {
 	overrides := make(map[string]ainselv1alpha1.AgentEnvVar, len(agent.Spec.Env))
 	order := make([]string, 0, len(agent.Spec.Env))
 	for _, e := range agent.Spec.Env {
@@ -290,22 +287,21 @@ func effectiveEnv(agent *ainselv1alpha1.Agent, img *ainselv1alpha1.AgentImage) [
 		overrides[e.Name] = e
 	}
 
-	out := make([]ainselv1alpha1.AgentImageEnvVar, 0, len(img.Spec.Env)+len(order))
+	out := make([]ainselv1alpha1.AgentEnvVar, 0, len(img.Spec.Env)+len(order))
 	inImage := make(map[string]bool, len(img.Spec.Env))
 	for _, e := range img.Spec.Env {
 		inImage[e.Name] = true
 		if o, ok := overrides[e.Name]; ok {
-			// The types are field-identical; staticcheck prefers the conversion.
-			out = append(out, ainselv1alpha1.AgentImageEnvVar(o))
+			out = append(out, o)
 			continue
 		}
-		out = append(out, e)
+		out = append(out, ainselv1alpha1.AgentEnvVar{Name: e.Name, Value: e.Value, Secret: e.Secret})
 	}
 	for _, name := range order {
 		if inImage[name] {
 			continue
 		}
-		out = append(out, ainselv1alpha1.AgentImageEnvVar(overrides[name]))
+		out = append(out, overrides[name])
 	}
 	return out
 }

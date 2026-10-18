@@ -96,6 +96,13 @@ func (s *Server) resolveMCPRequest(ctx context.Context, w http.ResponseWriter, r
 // A nil result means "no overrides", which is also what an empty request list
 // produces — clearing an agent's overrides returns it to the image defaults.
 func agentEnvFromRequest(w http.ResponseWriter, in []AgentImageEnvVarInfo, existing []agentv1alpha1.AgentEnvVar) ([]agentv1alpha1.AgentEnvVar, error) {
+	for _, e := range existing {
+		if e.ValueFrom != nil {
+			const message = "environment contains external Secret references; edit env through the Agent CRD"
+			writeError(w, http.StatusBadRequest, message)
+			return nil, fmt.Errorf("%s", message)
+		}
+	}
 	if len(in) == 0 {
 		return nil, nil
 	}
@@ -408,8 +415,8 @@ func toSimpleAgentResponse(a agentv1alpha1.Agent, imageDisplayName string) Simpl
 	if len(a.Spec.Env) > 0 {
 		resp.Env = make([]AgentImageEnvVarInfo, 0, len(a.Spec.Env))
 		for _, e := range a.Spec.Env {
-			info := AgentImageEnvVarInfo{Name: e.Name, Secret: e.Secret}
-			if !e.Secret {
+			info := AgentImageEnvVarInfo{Name: e.Name, Secret: e.Secret || e.ValueFrom != nil}
+			if !info.Secret {
 				info.Value = e.Value
 			}
 			resp.Env = append(resp.Env, info)

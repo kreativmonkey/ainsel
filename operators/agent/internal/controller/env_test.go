@@ -42,6 +42,20 @@ var _ = Describe("Agent Controller", func() {
 			cleanupAgentFixtures(ctx)
 		})
 
+		It("validates external Secret references without requiring a literal value", func() {
+			agent := &ainselv1alpha1.Agent{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, agent)).To(Succeed())
+			agent.Spec.Env = []ainselv1alpha1.AgentEnvVar{{Name: "GH_TOKEN", ValueFrom: &ainselv1alpha1.AgentEnvVarSource{
+				SecretKeyRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "github-token"}, Key: "token"},
+			}}}
+			Expect(k8sClient.Update(ctx, agent)).To(Succeed())
+			agent.Spec.Env[0].Value = "conflicting-literal"
+			Expect(k8sClient.Update(ctx, agent)).NotTo(Succeed())
+			agent.Spec.Env[0].Value = ""
+			agent.Spec.Env[0].ValueFrom.SecretKeyRef.Name = ""
+			Expect(k8sClient.Update(ctx, agent)).NotTo(Succeed())
+		})
+
 		It("should build MCP_SERVER_TOKENS from AgentImage tokenFromEnv entries", func() {
 			By("Updating the AgentImage with an MCP server that has tokenFromEnv")
 			img := &ainselv1alpha1.AgentImage{}

@@ -436,7 +436,9 @@ func (r *AgentReconciler) reconcileImageEnvSecret(ctx context.Context, agent *ai
 			secretData[e.Name] = []byte(v)
 			continue
 		}
-		secretData[e.Name] = []byte(e.Value)
+		if e.ValueFrom == nil {
+			secretData[e.Name] = []byte(e.Value)
+		}
 	}
 
 	secret := &corev1.Secret{
