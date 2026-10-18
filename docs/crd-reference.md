@@ -439,6 +439,9 @@ CSI RWOP constraint also prevents overlap while a pod is terminating. Native
 workers run at most one task Job per agent, even if `scaling.replicas` is larger;
 zero still pauses execution. Login containers receive only CLI home environment
 variables and no hub credentials. They have no Kubernetes service account token.
+Each native task receives a hub capability valid only for its own task and
+conversation messages. It expires after 24 hours; a Job still running or
+retrying after that needs to be replaced.
 Restrict namespace `pods/exec` access to the account owner and administrators:
 anyone who can exec into these containers can use that signed-in account.
 
@@ -449,3 +452,10 @@ in this native runtime path. Configure supported CLI features directly through
 the official CLI; do not place tokens in Agent YAML. Subscription eligibility,
 limits, and permitted usage remain governed by the CLI provider and the user's
 account plan.
+
+For public GitHub pull-request events, the runner fetches the patch from
+GitHub's fixed API host, limits it to 512 KiB, and includes it as untrusted
+review context. Set `AINSEL_REVIEW_REPO` (for example,
+`kreativmonkey/ainsel`) on the Agent to restrict which repository it will
+review. Findings appear in the AInsel task transcript; this runtime does not
+post GitHub review comments.
