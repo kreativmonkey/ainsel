@@ -292,15 +292,18 @@ def parse_npm_lockfile(lock: dict) -> list[dict]:
     return rows
 
 
-def collect_pi_extensions(repo_root: Path) -> list[Dep]:
-    """Deps of each pi extension, resolved from its committed package-lock.json.
+def collect_pi_extensions(repo_root: Path, *, package_dirs: list[Path] | None = None,
+                          ecosystem: str = "pi") -> list[Dep]:
+    """Collect locked runtime packages (Pi extensions by default).
 
     The lockfile pins name/version/license deterministically; the actual license
     texts are obtained from an `npm ci --omit=dev` install into a temp dir.
     """
     deps: list[Dep] = []
     extensions_root = repo_root / "pi" / "pi-extensions"
-    for ext_dir in sorted(p for p in extensions_root.iterdir() if p.is_dir()):
+    if package_dirs is None:
+        package_dirs = sorted(p for p in extensions_root.iterdir() if p.is_dir())
+    for ext_dir in package_dirs:
         lock_path = ext_dir / "package-lock.json"
         pkg_path = ext_dir / "package.json"
         if not lock_path.is_file() or not pkg_path.is_file():
@@ -331,12 +334,18 @@ def collect_pi_extensions(repo_root: Path) -> list[Dep]:
                 key = (row["name"], row["version"])
                 pkg_dir = installed.get(key)
                 texts = license_texts_for(pkg_dir) if pkg_dir else ()
+                # Platform packages ship the same Claude license as the wrapper.
+                # Use it on every host so cross-platform regeneration is stable.
+                if ecosystem == "subscription" and row["name"].startswith("@anthropic-ai/claude-code-"):
+                    wrapper = installed.get(("@anthropic-ai/claude-code", row["version"]))
+                    if wrapper:
+                        texts = license_texts_for(wrapper)
                 license_str = declared_license_to_spdx(row["license"]) or "Unknown"
                 if license_str == "Unknown" and texts:
                     classified = [t.spdx for t in texts if t.spdx and t.spdx != "Unknown"]
                     if classified:
                         license_str = " + ".join(sorted(set(classified)))
-                deps.append(Dep("pi", row["name"], row["version"], license_str,
+                deps.append(Dep(ecosystem, row["name"], row["version"], license_str,
                                 dep_dir(row["name"], row["version"]), texts))
     return deps
 
@@ -462,6 +471,7 @@ def collect_go_modules(repo_root: Path) -> list[Dep]:
 SECTIONS = [
     ("node", "Node.js - frontend and docs-site (pnpm workspace)"),
     ("pi", "Node.js - pi runtime extensions (pi/pi-extensions)"),
+    ("subscription", "Native subscription runtime (runtimes/subscription)"),
     ("go", "Go modules (services, operators, shared)"),
 ]
 
@@ -476,7 +486,8 @@ CI check:     .github/workflows/ci-licenses.yml regenerates and fails on any dif
 
 This file lists every third-party dependency statically bundled into ainsel's
 distributed artifacts (frontend SPA bundle, Go service/operator images, pi
-runtime image). Each row links to the license text as shipped in `LICENSES/`.
+and subscription runtime images). Each row links to the license text as
+shipped in `LICENSES/`.
 Project-level attributions and license elections (including the DOMPurify
 Apache-2.0 election) are recorded in [NOTICE](NOTICE).
 """
@@ -560,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
     deps: list[Dep] = []
     deps.extend(collect_pnpm_workspace(repo_root))
     deps.extend(collect_pi_extensions(repo_root))
+    deps.extend(collect_pi_extensions(
+        repo_root, package_dirs=[repo_root / "runtimes" / "subscription"],
+        ecosystem="subscription"))
     deps.extend(collect_go_modules(repo_root))
     deps = dedupe_within_ecosystem(deps)
     deps = apply_canonical_fallbacks(deps, repo_root)

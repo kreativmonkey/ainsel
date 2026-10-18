@@ -61,9 +61,9 @@ List all Agents in the configured namespace, sorted by resource name.
       "name": "Code Reviewer",
       "description": "...",
       "imageRef": {"name": "img-claude-coder"},
-      "runtime": {"provider": "ollama-cloud"},
+      "runtime": {"engine": "pi"},
       "llm": {"model": "unsloth/gpt-oss-120b-GGUF:F16", "maxTurns": 25, "vision": false},
-      "persona": {"inline": "..."},
+      "persona": {"id": "persona-123"},
       "enabledTools": ["read", "edit"],
       "replicas": 2,
       "memory": {"enabled": true, "provider": "example"},
@@ -113,13 +113,14 @@ Create a new Agent. The hub generates the resource name (`a-<short id>`); the re
 ```json
 {
   "name": "Code Reviewer",
+  "groupId": "group-123",
   "description": "...",
   "imageRef": {"name": "img-claude-coder"},
-  "runtime": {"provider": "ollama-cloud"},
-  "llm": {"model": "unsloth/gpt-oss-120b-GGUF:F16", "maxTurns": 25, "temperature": 0.2, "vision": true},
-  "persona": {"inline": "..."},
+  "runtime": {"engine": "pi"},
+  "llm": {"provider": "ollama-cloud", "model": "unsloth/gpt-oss-120b-GGUF:F16", "maxTurns": 25, "temperature": 0.2, "vision": true},
+  "persona": {"id": "persona-123"},
   "enabledTools": ["read", "edit"],
-  "scaling": {"replicas": 3},
+  "replicas": 3,
   "memory": {"enabled": true, "provider": "example"},
   "env": [{"name": "LOG_LEVEL", "value": "debug"}],
   "ollamaCloud": {"apiKey": "<consumed-once>"}
@@ -127,6 +128,8 @@ Create a new Agent. The hub generates the resource name (`a-<short id>`); the re
 ```
 
 `imageRef.name` is required and must reference an existing `AgentImage`. Any names in `enabledTools` not declared by that image are rejected. The `ollamaCloud.apiKey`, when present, is stored in a Secret named `<agent>-ollama-key` and never echoed back.
+
+For a native subscription CLI, set `runtime` to `{"engine":"codex","subscription":{"claimName":"codex-reviewer-home","login":true}}` or use `"claude"` as the engine. The claim must be an existing dedicated `ReadWriteOncePod` PVC, and `imageRef` must point to the subscription runtime image. While `login` is true, the operator withholds task Jobs and creates a login pod for the official CLI sign-in; set it to false after login. The API stores no subscription credentials. Native jobs are limited to one at a time per agent. See [the CRD reference](crd-reference.md) for the login commands and security details.
 
 **Response:** `201 Created` with the same shape as `GET /api/v1/agents/{name}`. `400` on validation errors, `500` on Kubernetes failures.
 
@@ -139,6 +142,8 @@ Fetch one Agent by resource name.
 ### PUT /api/v1/agents/{name}
 
 Update an Agent. Body fields are all optional; only fields that are present are applied. When `imageRef` or `enabledTools` changes, the new combination is re-validated against the referenced `AgentImage`.
+
+`runtime` updates the engine and subscription PVC/login mode together. `runtime` omitted preserves the current setting. The console and these endpoints still use the existing Authentik login; provider sign-in happens directly inside the native CLI login pod.
 
 `env` **replaces** this agent's override list when present: `{"env": []}` clears the overrides so the agent runs on the image's variables again. A secret entry submitted with an empty `value` keeps its stored value, so a client that never received the secret can round-trip the list safely.
 

@@ -107,6 +107,25 @@ describe('AgentForm (edit)', () => {
     vi.unstubAllGlobals()
   })
 
+  it('uses native subscription login without Pi credential or model controls', async () => {
+    const user = userEvent.setup()
+    renderEditForm()
+    await waitForPrefill()
+    await user.selectOptions(screen.getByLabelText('Agent runtime'), 'claude')
+    await user.type(screen.getByLabelText('Credential PVC'), 'private-home')
+    expect(screen.getByLabelText('Model')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^provider$/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Context Window')).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /image input/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(putBody(fetchMock)).toBeDefined())
+    const body = putBody(fetchMock)!
+    expect(body.llm).toEqual({ model: 'claude-opus-4-7', provider: 'claude', maxTurns: 100 })
+    expect(body).not.toHaveProperty('ollamaCloud')
+    expect(body).not.toHaveProperty('customProvider')
+  })
+
   it('pre-fills every field from the stored agent', async () => {
     renderEditForm()
     await waitFor(() =>

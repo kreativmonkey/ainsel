@@ -1,0 +1,11 @@
+{
+  "name": "ainsel-subscription-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.302",
+    "@openai/codex": "0.163.0"
+  }
+}

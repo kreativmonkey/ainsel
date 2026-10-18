@@ -626,15 +626,12 @@ func (s *Server) handleIngestTaskLog(w http.ResponseWriter, r *http.Request) {
 
 // handleIngestTaskMessage accepts POST /api/internal/task-messages from agent runtimes.
 func (s *Server) handleIngestTaskMessage(w http.ResponseWriter, r *http.Request) {
-	if !s.requireInternalToken(w, r) {
+	claims, scoped := s.scopedTaskClaims(r)
+	if !scoped && !s.requireInternalToken(w, r) {
 		return
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if s.taskLogs == nil {
-		writeError(w, http.StatusServiceUnavailable, "task log store not configured")
 		return
 	}
 
@@ -644,10 +641,41 @@ func (s *Server) handleIngestTaskMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if scoped && (msg.AgentName != claims.Agent || msg.CorrelationID != fmt.Sprintf("task-%d", claims.Task)) {
+		writeError(w, http.StatusUnauthorized, "task token scope mismatch")
+		return
+	}
+
+	if scoped {
+		if s.eventQueue == nil {
+			writeError(w, http.StatusServiceUnavailable, "event queue not configured")
+			return
+		}
+		task, err := s.eventQueue.GetTask(r.Context(), claims.Task, claims.Agent)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get task")
+			return
+		}
+		if !taskMessageMatchesInvocation(&msg, task) {
+			writeError(w, http.StatusUnauthorized, "task invocation scope mismatch")
+			return
+		}
+	}
+
+	if s.taskLogs == nil {
+		writeError(w, http.StatusServiceUnavailable, "task log store not configured")
+		return
+	}
 	if err := s.taskLogs.InsertConversation(r.Context(), &msg); err != nil {
 		slog.Error("task message insert failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to store task message")
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// taskMessageMatchesInvocation binds scoped conversation rows to the queue's
+// current invocation, including after a retry has replaced the invocation ID.
+func taskMessageMatchesInvocation(msg *tasklogs.ConversationMessage, task *eventqueue.Task) bool {
+	return task != nil && msg.InvocationID == task.InvocationID
 }

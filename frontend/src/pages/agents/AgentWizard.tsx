@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useForm, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { RuntimeFields } from './RuntimeFields'
 import { useCreateAgent } from '../../api/agents'
 import { useAgentImage, useAgentImages } from '../../api/agentImages'
 import { usePersonas } from '../../api/personas'
@@ -31,7 +32,7 @@ import {
  */
 const STEPS = [
   { id: 'identity', idx: '§01', title: 'Identity', fields: ['name', 'description', 'groupId'] },
-  { id: 'runtime', idx: '§02', title: 'Runtime', fields: ['imageRef.name'] },
+  { id: 'runtime', idx: '§02', title: 'Runtime', fields: ['imageRef.name', 'runtime.engine', 'runtime.subscription.claimName'] },
   {
     id: 'model',
     idx: '§03',
@@ -118,6 +119,7 @@ export function AgentWizard() {
   const selectedImage = watch('imageRef.name')
   const image = useAgentImage(selectedImage || undefined)
   const provider = watch('llm.provider')
+  const nativeRuntime = (watch('runtime.engine') ?? 'pi') !== 'pi'
 
   const goTo = (index: number) => {
     const id = STEP_IDS[index]
@@ -319,6 +321,16 @@ export function AgentWizard() {
                     />
                     <input type="hidden" {...register('imageRef.name')} />
                   </Field>
+                  <RuntimeFields
+                    value={watch('runtime') ?? { engine: 'pi' }}
+                    onChange={(value) => {
+                      setValue('runtime', value, { shouldDirty: true })
+                      if (value.engine === 'pi' && (provider === 'codex' || provider === 'claude')) {
+                        setValue('llm.provider', '', { shouldDirty: true })
+                      }
+                    }}
+                    error={errors.runtime?.subscription?.claimName?.message}
+                  />
                 </div>
 
                 {selectedImage && image.data ? (
@@ -365,7 +377,8 @@ export function AgentWizard() {
                   <Field label="Max Turns" htmlFor="llm.maxTurns">
                     <Input id="llm.maxTurns" type="number" min={1} {...register('llm.maxTurns')} />
                   </Field>
-                  <Field label="Temperature" htmlFor="llm.temperature">
+                  {!nativeRuntime ? <>
+<Field label="Temperature" htmlFor="llm.temperature">
                     <Input
                       id="llm.temperature"
                       type="number"
@@ -389,8 +402,10 @@ export function AgentWizard() {
                       {...register('llm.contextWindow')}
                     />
                   </Field>
+</> : null}
                 </div>
-                <div className="form-grid" style={{ marginTop: 16 }}>
+                {!nativeRuntime ? <>
+<div className="form-grid" style={{ marginTop: 16 }}>
                   <Field label="Provider" htmlFor="llm.provider">
                     <Select
                       id="llm.provider"
@@ -449,6 +464,7 @@ export function AgentWizard() {
                     </div>
                   </Field>
                 </div>
+                </> : null}
               </>
             ) : null}
 
@@ -501,8 +517,8 @@ export function AgentWizard() {
                   <dt style={{ color: 'var(--ink-3)' }}>Model</dt>
                   <dd style={{ margin: 0 }}>
                     {watch('llm.model') || '—'}
-                    {provider ? ` · ${provider}` : ''}
-                    {watch('llm.vision') ? ' · images on' : ''}
+                    {nativeRuntime ? ` · ${watch('runtime.engine')}` : provider ? ` · ${provider}` : ''}
+                    {!nativeRuntime && watch('llm.vision') ? ' · images on' : ''}
                   </dd>
                   <dt style={{ color: 'var(--ink-3)' }}>Persona</dt>
                   <dd style={{ margin: 0 }}>

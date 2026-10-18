@@ -29,6 +29,7 @@ package-lock.json
 # with npm, so their committed lockfiles pin what ships in the image (and what
 # THIRD_PARTY_LICENSES.md lists; see scripts/generate-third-party-licenses.py).
 !pi/pi-extensions/*/package-lock.json
+!runtimes/subscription/package-lock.json
 
 # Python bytecode (scripts/*.py are run and sometimes imported in tests)
 __pycache__/

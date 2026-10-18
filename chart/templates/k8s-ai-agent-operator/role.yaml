@@ -26,6 +26,12 @@ rules:
   - apiGroups: [""]
     resources: ["services", "secrets", "serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # configmaps: The operator creates/updates two ConfigMaps per agent:
   #   - <agent>-pi-models: LLM model definitions for ollama-cloud agents
   #   - <agent>-forgejo-urls: connector URL mappings for multi-connector mode

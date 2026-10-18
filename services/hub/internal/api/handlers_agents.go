@@ -135,8 +135,37 @@ func agentEnvFromRequest(w http.ResponseWriter, in []AgentImageEnvVarInfo, exist
 	return out, nil
 }
 
+// AgentRuntimeInfo exposes native CLI selection without exposing operator settings.
+type AgentRuntimeInfo struct {
+	Engine       string                           `json:"engine"`
+	Subscription *agentv1alpha1.AgentSubscription `json:"subscription,omitempty"`
+}
+
+func runtimeProblem(runtime *AgentRuntimeInfo) string {
+	if runtime == nil {
+		return ""
+	}
+	switch runtime.Engine {
+	case "", "pi":
+		if runtime.Subscription != nil {
+			return "subscription requires the codex or claude runtime"
+		}
+	case "codex", "claude":
+		if runtime.Subscription == nil || runtime.Subscription.ClaimName == "" {
+			return "subscription credential claimName is required"
+		}
+		if problems := validation.IsDNS1123Subdomain(runtime.Subscription.ClaimName); len(problems) > 0 {
+			return "invalid subscription claimName: " + problems[0]
+		}
+	default:
+		return "runtime engine must be pi, codex or claude"
+	}
+	return ""
+}
+
 // SimpleAgentResponse is the simplified API representation of an Agent.
 type SimpleAgentResponse struct {
+	Runtime      *AgentRuntimeInfo `json:"runtime,omitempty"`
 	ID           string            `json:"id"`
 	Name         string            `json:"name"`
 	Description  string            `json:"description,omitempty"`
@@ -247,6 +276,7 @@ func scalingProblem(scaling *agentv1alpha1.AgentScaling) string {
 
 // SimpleAgentCreateRequest is used to create a new Agent.
 type SimpleAgentCreateRequest struct {
+	Runtime      *AgentRuntimeInfo `json:"runtime,omitempty"`
 	Name         string            `json:"name"`
 	GroupID      string            `json:"groupId"`
 	Description  string            `json:"description,omitempty"`
@@ -271,6 +301,7 @@ type SimpleAgentCreateRequest struct {
 
 // SimpleAgentUpdateRequest is used to update an existing Agent. All fields are optional.
 type SimpleAgentUpdateRequest struct {
+	Runtime      *AgentRuntimeInfo  `json:"runtime,omitempty"`
 	Name         *string            `json:"name,omitempty"`
 	Description  *string            `json:"description,omitempty"`
 	ImageRef     *AgentImageRefInfo `json:"imageRef,omitempty"`
@@ -313,6 +344,7 @@ func agentUpdatedAt(a agentv1alpha1.Agent) string {
 
 func toSimpleAgentResponse(a agentv1alpha1.Agent, imageDisplayName string) SimpleAgentResponse {
 	resp := SimpleAgentResponse{
+		Runtime:     &AgentRuntimeInfo{Engine: a.Spec.Runtime.Engine, Subscription: a.Spec.Runtime.Subscription},
 		ID:          a.Name,
 		Name:        a.Spec.DisplayName,
 		Description: a.Spec.Description,
@@ -327,6 +359,10 @@ func toSimpleAgentResponse(a agentv1alpha1.Agent, imageDisplayName string) Simpl
 		},
 		EnabledTools: a.Spec.EnabledTools,
 		UpdatedAt:    agentUpdatedAt(a),
+	}
+
+	if resp.Runtime.Engine == "" {
+		resp.Runtime.Engine = "pi"
 	}
 
 	if a.Spec.Persona.ID != "" {
@@ -557,7 +593,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 // here, before any sub-route dispatch, so that adding a new task sub-route
 // cannot accidentally ship unauthenticated.
 func (s *Server) handleInternalAgent(w http.ResponseWriter, r *http.Request) {
-	if !s.requireInternalToken(w, r) {
+	if !s.requireTaskRouteToken(w, r) {
 		return
 	}
 	name := extractName(r.URL.Path, "/api/internal/agents/")
@@ -668,6 +704,11 @@ func (s *Server) createAgent(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 
+	if problem := runtimeProblem(req.Runtime); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+
 	imageDisplayName, code, msg := s.validateAgentImageRef(ctx, req.ImageRef.Name, req.EnabledTools)
 	if code != 0 {
 		http.Error(w, msg, code)
@@ -713,6 +754,10 @@ func (s *Server) createAgent(ctx context.Context, w http.ResponseWriter, r *http
 	agent.APIVersion = "ainsel.dev/v1alpha1"
 	agent.Kind = "Agent"
 
+	if req.Runtime != nil {
+		agent.Spec.Runtime.Engine = req.Runtime.Engine
+		agent.Spec.Runtime.Subscription = req.Runtime.Subscription
+	}
 	agent.Spec.DisplayName = req.Name
 	agent.Spec.Description = req.Description
 	agent.Spec.ImageRef = agentv1alpha1.AgentImageRef{Name: req.ImageRef.Name}
@@ -893,6 +938,11 @@ func (s *Server) updateAgent(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 
+	if problem := runtimeProblem(req.Runtime); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+
 	// Validate imageRef/enabledTools if either is being changed.
 	effectiveRef := existing.Spec.ImageRef.Name
 	if req.ImageRef != nil {
@@ -932,6 +982,10 @@ func (s *Server) updateAgent(ctx context.Context, w http.ResponseWriter, r *http
 		}
 	}
 
+	if req.Runtime != nil {
+		existing.Spec.Runtime.Engine = req.Runtime.Engine
+		existing.Spec.Runtime.Subscription = req.Runtime.Subscription
+	}
 	if req.Name != nil {
 		existing.Spec.DisplayName = *req.Name
 	}

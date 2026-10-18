@@ -31,6 +31,9 @@ for its container image and tool catalog.
 | `displayName` | string | Yes | Human-readable agent name |
 | `description` | string | No | Agent description |
 | `imageRef.name` | string | Yes | Name of the `AgentImage` CR in the same namespace that provides the container image and tool catalog |
+| `runtime.engine` | string | No | Task runtime: `pi` (default), `codex`, or `claude`. Native engines require an image containing the official CLI and `/opt/ainsel/subscription/runner.mjs` |
+| `runtime.subscription.claimName` | string | Native engines | Existing dedicated `ReadWriteOncePod` PVC for the CLI home; mounted only into the agent container at `/home/agent`. Retained independently of the Agent |
+| `runtime.subscription.login` | bool | No | Default false. Drain existing task Jobs, withhold new dispatch and create `login-<agent>-0` pod for direct end-user CLI sign-in. False removes the login pod before resuming tasks |
 | `runtime.imagePullPolicy` | string | No | Kubernetes image pull policy (`Always`, `Never`, `IfNotPresent`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits for the agent pod |
 | `llm.model` | string | Yes | LLM model identifier (e.g. `unsloth/gpt-oss-120b-GGUF:F16`) |
@@ -43,7 +46,7 @@ for its container image and tool catalog.
 | `skills.items[]` | []string | No | Agent-scoped skill selection (skill ids). Present = explicit override (`items: []` = no skills at all); absent = inherit the referenced image's `enabledSkills` |
 | `mcp.servers[]` | []AgentMCPServer | No | Agent-scoped MCP servers (`name`, `url`, `tokenFromEnv`), resolved from the hub's MCP registry when the agent is written. Present = explicit override (`servers: []` = connect to none); absent = inherit the image's `mcpServers`. The operator injects `MCP_SERVERS` / `MCP_SERVER_TOKENS` from this list |
 | `env[]` | []AgentEnvVar | No | Per-agent environment variables (`name`, `value`, `secret`) layered on top of the referenced image's `env`: a matching name overrides the image's value and secret flag, a new name is added. The operator writes the effective set to the `<agent>-image-env` Secret and injects each entry into the agent container |
-| `scaling.replicas` | int32 | No | Concurrency cap: the maximum number of per-task Jobs the operator keeps in flight for this agent (default 1). Each queued task gets its own Job up to this cap; `0` pauses the agent (nothing is dispatched) |
+| `scaling.replicas` | int32 | No | Concurrency cap: the maximum number of per-task Jobs the operator keeps in flight for this agent (default 1). Native subscription engines cap positive values at 1. Each queued task gets its own Job up to this cap; `0` pauses the agent (nothing is dispatched) |
 | `scaling.disabled` | bool | No | Set by the operator for a stopped agent: hold at zero even if the hub still counts queued work. Cleared on start |
 | `pause.pausedUntil` | Time | No | Pause window end. **Present = paused**: while active (or while `pausedUntil` is omitted = indefinite) the hub's claim endpoint hands this agent no tasks, so routed tasks accumulate as a backlog that drains in id order when the pause ends — nothing is lost. Expiry is evaluated at read time, so an expiring pause needs no controller. Orthogonal to `scaling`, which governs how many tasks run at once, not whether they are delivered. Managed via `POST`/`DELETE /api/v1/agents/{name}/pause` or by editing the CR. Caveat: while an **indefinite** pause is active nothing prunes the backlog — `agent_tasks` and invocation rows keep growing until the pause is lifted |
 | `memory.enabled` | bool | Yes | Enable shared memory |
@@ -388,3 +391,71 @@ schedule: "0 9 * * 1-5"
 prompt: "Summarize all open pull requests and post a daily digest."
 enabled: true
 ```
+### Native subscription CLI login
+
+Native runtimes use the official `codex` or `claude` CLI with direct end-user
+sign-in. AInsel does not extract, translate, read, or distribute CLI credentials.
+Use one dedicated PVC per agent/account. Its `ReadWriteOncePod` access mode
+requires a CSI driver supporting RWOP (Kubernetes 1.29 or newer recommended);
+`ReadWriteOnce` does not prevent concurrent writers on the same node and is
+rejected. Provision and retain the PVC separately from the Agent, using your
+storage class's encryption and backup policies. The operator does not delete it.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reviewer-cli-home
+spec:
+  accessModes: [ReadWriteOncePod]
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+Select an `AgentImage` built for the native runtime: Node.js, the unmodified
+official CLI, and `runtimes/subscription/runner.mjs` installed at
+`/opt/ainsel/subscription/runner.mjs`. The existing Pi image is not a supported
+native image. Both the CLI and runner must work as UID/GID 1000 with a read-only
+root filesystem. The PVC is writable at `/home/agent`; `HOME`, `CODEX_HOME`, and
+`CLAUDE_CONFIG_DIR` point into that private home. CLI API key and API endpoint
+overrides are withheld so subscription sign-in remains authoritative.
+
+For an Agent named `reviewer`, enable login mode after configuring its image:
+
+```sh
+kubectl -n ainsel patch agent reviewer --type merge -p '{"spec":{"runtime":{"engine":"codex","subscription":{"claimName":"reviewer-cli-home","login":true}}}}'
+kubectl -n ainsel wait --for=condition=Ready pod/login-reviewer-0 --timeout=300s
+kubectl -n ainsel exec -it login-reviewer-0 -- codex login --device-auth
+# For runtime.engine: claude, sign in directly through the official CLI:
+# kubectl -n ainsel exec -it login-reviewer-0 -- claude auth login
+kubectl -n ainsel patch agent reviewer --type merge -p '{"spec":{"runtime":{"subscription":{"login":false}}}}'
+```
+
+Login mode lets existing task Jobs finish before creating the pod; long tasks
+can make the wait exceed its timeout. New tasks remain queued. Turning login
+off deletes the login pod and waits for deletion before resuming dispatch. The
+CSI RWOP constraint also prevents overlap while a pod is terminating. Native
+workers run at most one task Job per agent, even if `scaling.replicas` is larger;
+zero still pauses execution. Login containers receive only CLI home environment
+variables and no hub credentials. They have no Kubernetes service account token.
+Each native task receives a hub capability valid only for its own task and
+conversation messages. It expires after 24 hours; a Job still running or
+retrying after that needs to be replaced.
+Restrict namespace `pods/exec` access to the account owner and administrators:
+anyone who can exec into these containers can use that signed-in account.
+
+Native Jobs omit sidecars and process namespace sharing to keep the private home
+inaccessible through another container's `/proc`. Pi-specific skill installation,
+container tools, chat sidecars, and automatic MCP configuration are unavailable
+in this native runtime path. Configure supported CLI features directly through
+the official CLI; do not place tokens in Agent YAML. Subscription eligibility,
+limits, and permitted usage remain governed by the CLI provider and the user's
+account plan.
+
+For public GitHub pull-request events, the runner fetches the patch from
+GitHub's fixed API host, limits it to 512 KiB, and includes it as untrusted
+review context. Set `AINSEL_REVIEW_REPO` (for example,
+`kreativmonkey/ainsel`) on the Agent to restrict which repository it will
+review. Findings appear in the AInsel task transcript; this runtime does not
+post GitHub review comments.

@@ -113,6 +113,14 @@ type AgentEnvVar struct {
 // Fields like ImagePullPolicy and Resources are set by the operator or Helm
 // bootstrap — they are not exposed via the hub REST API.
 type AgentRuntime struct {
+	// Engine selects the task runtime. Empty preserves the Pi runtime.
+	// +optional
+	// +kubebuilder:validation:Enum=pi;codex;claude
+	Engine string `json:"engine,omitempty"`
+	// Subscription provides the private persistent home for a native CLI.
+	// +optional
+	Subscription *AgentSubscription `json:"subscription,omitempty"`
+
 	ImagePullPolicy corev1.PullPolicy           `json:"imagePullPolicy,omitempty"`
 	Resources       corev1.ResourceRequirements `json:"resources,omitempty"`
 	// SecurityHardened controls whether the operator applies pod and container
@@ -122,6 +130,17 @@ type AgentRuntime struct {
 	// images that require it (e.g. sidecar images that must run as root).
 	// +optional
 	SecurityHardened *bool `json:"securityHardened,omitempty"`
+}
+
+// AgentSubscription configures direct end-user CLI authentication. The operator
+// never reads authentication files. Provision a dedicated ReadWriteOncePod PVC.
+type AgentSubscription struct {
+	// ClaimName references an existing PVC in the Agent namespace.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+	// Login drains task Jobs and opens an interactive login pod instead.
+	// +optional
+	Login bool `json:"login,omitempty"`
 }
 
 // AgentLLMProvider enumerates the supported LLM provider backends.

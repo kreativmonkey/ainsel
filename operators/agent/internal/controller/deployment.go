@@ -234,6 +234,9 @@ func newPodPlan(agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alph
 // to zero replicas — all work runs as Jobs.
 func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alpha1.AgentImage, podImage string) (*appsv1.Deployment, []mcpservers.MissingEnvEntry, error) {
 	plan := newPodPlan(agent, agentName, img)
+	if nativeRuntime(agent) {
+		configureSubscriptionPlan(agent, plan)
+	}
 
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -272,10 +275,12 @@ func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *ainsel
 		// Inject the sidecar containers composed by buildSidecars. The agent
 		// container stays first in the list; sidecars share its network
 		// namespace (accessible via localhost).
-		deploy.Spec.Template.Spec.Containers = append(
-			deploy.Spec.Template.Spec.Containers,
-			buildSidecars(agent, agentName, img)...,
-		)
+		if !nativeRuntime(agent) {
+			deploy.Spec.Template.Spec.Containers = append(
+				deploy.Spec.Template.Spec.Containers,
+				buildSidecars(agent, agentName, img)...,
+			)
+		}
 
 		return r.stampPodTemplateAnnotations(ctx, agent, agentName, img, podImage, plan, deploy)
 	})
@@ -473,6 +478,17 @@ func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName s
 			Value: tokenValue,
 		})
 	}
+	if nativeRuntime(agent) {
+		filtered := envs[:0]
+		for _, e := range envs {
+			switch e.Name {
+			case "HUB_INTERNAL_VALIDATE_SECRET", "OLLAMA_API_KEY", "OPENCODE_API_KEY", "ALIBABA_CLOUD_API_KEY", "CUSTOM_PROVIDER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "MCP_SERVERS", "MCP_SERVER_TOKENS", "AINSEL_RUNTIME", "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR":
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		envs = append(filtered, subscriptionEnv(agent)...)
+	}
 	return envs
 }
 
@@ -529,17 +545,26 @@ func (r *AgentReconciler) renderPodTemplate(agent *ainselv1alpha1.Agent, img *ai
 			},
 		}
 	}
+	var command []string
+	workingDir := ""
+	if nativeRuntime(agent) {
+		workingDir = "/workspace"
+		command = []string{"node", "/opt/ainsel/subscription/runner.mjs"}
+	}
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: plan.labels,
 		},
 		Spec: corev1.PodSpec{
 			SecurityContext:               podSecContext,
+			AutomountServiceAccountToken:  subscriptionServiceAccountToken(agent),
 			TerminationGracePeriodSeconds: ptr.To(r.gracePeriod()),
 			InitContainers:                plan.initContainers,
 			Containers: []corev1.Container{
 				{
 					Name:            "agent",
+					Command:         command,
+					WorkingDir:      workingDir,
 					Image:           podImage,
 					ImagePullPolicy: plan.imagePullPolicy,
 					Resources:       agent.Spec.Runtime.Resources,
@@ -599,6 +624,9 @@ func (r *AgentReconciler) stampPodTemplateAnnotations(ctx context.Context, agent
 			Optional:             ptr.To(true),
 		})
 	}
+	if nativeRuntime(agent) {
+		hashRefs = nil
+	}
 	hash, err := r.computeSecretHash(ctx, agent.Namespace, hashRefs, agentName+"-image-env")
 	if err != nil {
 		return fmt.Errorf("computing secret hash: %w", err)
@@ -623,11 +651,13 @@ func (r *AgentReconciler) stampPodTemplateAnnotations(ctx context.Context, agent
 	// so without this an agent that is already awake keeps advertising the
 	// old model capabilities — notably spec.llm.vision, which pi only reads
 	// at startup.
-	piModelsHash, err := r.computeConfigMapHash(ctx, agent.Namespace, plan.piModelsCMName)
-	if err != nil {
-		return fmt.Errorf("computing pi models hash: %w", err)
+	if !nativeRuntime(agent) {
+		piModelsHash, err := r.computeConfigMapHash(ctx, agent.Namespace, plan.piModelsCMName)
+		if err != nil {
+			return fmt.Errorf("computing pi models hash: %w", err)
+		}
+		deploy.Spec.Template.Annotations[piModelsHashAnnotation] = piModelsHash
 	}
-	deploy.Spec.Template.Annotations[piModelsHashAnnotation] = piModelsHash
 
 	// Compute a stable hash of the shared skills ConfigMap data and
 	// annotate the pod template. When the hub updates a skill, the hash
