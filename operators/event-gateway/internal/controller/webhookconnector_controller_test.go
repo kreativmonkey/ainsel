@@ -141,7 +141,7 @@ var _ = Describe("WebhookConnector Controller", func() {
 		}, 10*time.Second, 100*time.Millisecond).Should(BeTrue())
 	})
 
-	It("converts an existing Ingress to an F5 Minion and back", func() {
+	It("replaces an F5 rewrite-target on an existing exact-path Minion and restores standalone mode", func() {
 		conn := newConnector(false)
 		Expect(k8sClient.Create(ctx, conn)).To(Succeed())
 		reconcileOnce()
@@ -150,12 +150,21 @@ var _ = Describe("WebhookConnector Controller", func() {
 			Client: k8sClient, Scheme: k8sClient.Scheme(),
 			ConnectorIngressMode: "nginx-inc-minion",
 		}
+		existing := &networkingv1.Ingress{}
+		Expect(k8sClient.Get(ctx, ingKey, existing)).To(Succeed())
+		existing.Annotations = map[string]string{
+			"nginx.org/mergeable-ingress-type": "minion",
+			"nginx.org/rewrite-target":         "/publish",
+		}
+		existing.Spec.TLS = nil
+		Expect(k8sClient.Update(ctx, existing)).To(Succeed())
+
 		Expect(r.reconcileWebhookIngress(ctx, conn)).To(Succeed())
 		ing := &networkingv1.Ingress{}
 		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
 		Expect(ing.Annotations).To(Equal(map[string]string{
 			"nginx.org/mergeable-ingress-type": "minion",
-			"nginx.org/rewrite-target":         "/publish",
+			"nginx.org/rewrites":               "serviceName=" + resourceName + " rewrite=/publish",
 		}))
 		Expect(ing.Spec.TLS).To(BeEmpty())
 		Expect(*ing.Spec.IngressClassName).To(Equal("nginx"))
