@@ -549,7 +549,7 @@ func (r *AgentReconciler) renderPodTemplate(agent *ainselv1alpha1.Agent, img *ai
 	workingDir := ""
 	if nativeRuntime(agent) {
 		workingDir = "/workspace"
-		command = []string{"node", "/opt/ainsel/subscription/runner.mjs"}
+		command = subscriptionCommand("node", "/opt/ainsel/subscription/runner.mjs")
 	}
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{

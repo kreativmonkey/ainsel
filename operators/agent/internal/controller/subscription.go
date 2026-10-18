@@ -16,8 +16,13 @@ import (
 	api "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
 )
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+
+// Initialize private CLI homes on a fresh PVC before starting either process.
+func subscriptionCommand(command ...string) []string {
+	return append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" && exec "$@"`, "--"}, command...)
+}
 
 func nativeRuntime(agent *api.Agent) bool {
 	return agent.Spec.Runtime.Engine == "codex" || agent.Spec.Runtime.Engine == "claude"
@@ -119,7 +124,7 @@ func (r *AgentReconciler) syncSubscriptionLogin(ctx context.Context, agent *api.
 	c := tpl.Spec.Containers[0]
 	c.Name = "login"
 	c.WorkingDir = "/home/agent"
-	c.Command = []string{"sleep", "infinity"}
+	c.Command = subscriptionCommand("sleep", "infinity")
 	c.Args = nil
 	// Login only receives the CLI home configuration. It has no hub token,
 	// provider keys, persona files, sidecars or service account credentials.
