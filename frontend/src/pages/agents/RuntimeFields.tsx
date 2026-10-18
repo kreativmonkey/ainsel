@@ -13,14 +13,19 @@ export function RuntimeFields({ value, onChange, error }: {
       <Field label="Agent runtime" htmlFor="runtime-engine">
         <Select id="runtime-engine" value={value.engine} onChange={(engine) => onChange({
           engine: engine as AgentRuntime['engine'],
-          ...(engine === 'pi' ? {} : { subscription: value.subscription ?? { claimName: '', login: false } }),
+          ...(value.subscription || engine !== 'pi' ? { subscription: value.subscription ?? { claimName: '', login: false } } : {}),
         })} options={[
-          { value: 'pi', label: 'Pi (API provider)' },
+          { value: 'pi', label: 'Pi (API or ChatGPT subscription)' },
           { value: 'codex', label: 'Codex (ChatGPT subscription)' },
           { value: 'claude', label: 'Claude Code (Claude subscription)' },
         ]} />
       </Field>
-      {value.engine !== 'pi' ? <>
+      {value.engine === 'pi' ? <label className="label">
+        <input type="checkbox" checked={!!value.subscription}
+          onChange={(e) => onChange({ engine: 'pi', ...(e.target.checked ? { subscription: { claimName: '', login: false } } : {}) })} />
+        {' '}ChatGPT subscription
+      </label> : null}
+      {value.engine !== 'pi' || value.subscription ? <>
         <Field label="Credential PVC" htmlFor="runtime-claim" error={error}>
           <Input id="runtime-claim" value={value.subscription?.claimName ?? ''}
             onChange={(e) => onChange({ ...value, subscription: { login: value.subscription?.login ?? false, claimName: e.target.value } })} />
@@ -31,10 +36,10 @@ export function RuntimeFields({ value, onChange, error }: {
           {' '}Login mode (pause tasks for subscription login)
         </label>
         <p className="label" style={{ margin: 0, color: 'var(--ink-3)' }}>
+          {value.subscription?.login ? 'After saving, tasks pause for subscription sign-in. ' : 'After saving, tasks use the saved subscription credentials. '}
           Use a dedicated existing ReadWriteOncePod PVC in the agent namespace.
-          Enable login mode, save, then run the native CLI login in the agent's login pod.
-          Disable login mode and save to resume tasks. Credentials stay on the PVC;
-          sign-in to this console continues through Authentik. The selected image must include this CLI.
+          {value.engine === 'pi' ? 'Enable login mode and save to sign in with Pi in the agent’s login pod.' : 'Enable login mode and save to sign in in the agent’s login pod.'}
+          Disable login mode and save to resume tasks. Credentials stay on the PVC. {value.engine === 'pi' ? 'Pi uses the OpenAI Codex provider for the ChatGPT subscription.' : 'The selected image must include the selected runtime.'}
         </p>
       </> : null}
     </div>

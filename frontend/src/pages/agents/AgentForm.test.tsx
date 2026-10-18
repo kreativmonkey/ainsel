@@ -126,6 +126,22 @@ describe('AgentForm (edit)', () => {
     expect(body).not.toHaveProperty('customProvider')
   })
 
+  it('saves a Pi ChatGPT subscription without an API key', async () => {
+    const user = userEvent.setup()
+    renderEditForm()
+    await waitForPrefill()
+    await user.click(screen.getByLabelText('ChatGPT subscription'))
+    expect(screen.getByLabelText(/^provider$/i)).toHaveValue('openai-codex')
+    expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Credential PVC'), 'pi-auth')
+    await user.click(screen.getByLabelText(/Login mode/))
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(putBody(fetchMock)).toBeDefined())
+    expect(putBody(fetchMock)?.runtime).toEqual({ engine: 'pi', subscription: { claimName: 'pi-auth', login: true } })
+    expect(putBody(fetchMock)?.llm).toMatchObject({ provider: 'openai-codex' })
+    expect(putBody(fetchMock)).not.toHaveProperty('ollamaCloud')
+  })
+
   it('pre-fills every field from the stored agent', async () => {
     renderEditForm()
     await waitFor(() =>

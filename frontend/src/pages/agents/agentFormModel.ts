@@ -9,6 +9,7 @@ import type {
 
 export const LLM_PROVIDERS = [
   { value: '', label: 'None' },
+  { value: 'openai-codex', label: 'ChatGPT subscription (Pi)' },
   { value: 'ollama-cloud', label: 'Ollama Cloud' },
   { value: 'opencode', label: 'OpenCode' },
   { value: 'alibaba-cloud', label: 'Alibaba Token Plan' },
@@ -75,7 +76,9 @@ export const agentSchema = z
     groupId: z.string().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.runtime?.engine !== undefined && data.runtime.engine !== 'pi' && !data.runtime.subscription?.claimName.trim()) {
+    const subscriptionRequired = (data.runtime?.engine !== undefined && data.runtime.engine !== 'pi')
+      || !!data.runtime?.subscription || data.llm.provider === 'openai-codex'
+    if (subscriptionRequired && !data.runtime?.subscription?.claimName.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime', 'subscription', 'claimName'], message: 'Credential PVC is required' })
     }
     if ((!data.runtime || data.runtime.engine === 'pi') && data.llm.provider === 'custom' && !data.customProviderUrl?.trim()) {
