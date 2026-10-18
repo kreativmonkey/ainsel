@@ -37,7 +37,7 @@ Notes that matter here:
   existing CR in every cluster starts failing validation on upgrade.
 - Defaults are applied by the API server on write — they do **not**
   retroactively fill existing objects, so code must still handle the zero value.
-- A new `status` subresource field requires `make generate` (deepcopy) and, if
+- A new `status` subresource field requires regenerating the shared deepcopy code and, if
   it is printed, a `+kubebuilder:printcolumn` marker.
 - `Trigger` and `CronTrigger` are **DB-backed, not CRDs** (see
   [`docs/crd-reference.md`](../../../docs/crd-reference.md)). Changing them
@@ -49,14 +49,16 @@ Notes that matter here:
 ## 2. Regenerate the operator bases
 
 ```bash
-cd operators/agent && make manifests generate     # Agent, AgentImage
-cd operators/event-gateway && make manifests generate   # WebhookConnector
+cd operators/agent && make manifests                 # Agent, AgentImage
+cd operators/event-gateway && make manifests         # WebhookConnector
+cd operators/agent && bin/controller-gen object:headerFile=hack/boilerplate.go.txt paths=../../shared/api/...
 ```
 
 `make manifests` runs controller-gen against `./...` **and** `../../shared/api/...`
-(the types are in the sibling module), and `make generate` refreshes
-`zz_generated.deepcopy.go` — required whenever a type changes, or the operator
-cannot compile the new field.
+(the types are in the sibling module). `make generate` only scans `./...`, so it
+does **not** refresh `shared/api/api/v1alpha1/zz_generated.deepcopy.go`. Run
+controller-gen explicitly against the shared module as shown above whenever a
+type changes.
 
 Expected: the base YAML under `config/crd/bases/ainsel.dev_*.yaml` gains your
 field. If the base *loses* something you did not touch, you regenerated with a
@@ -121,8 +123,8 @@ helm lint chart/ && helm template chart/ > /dev/null
 |---|---|---|
 | Edited the chart YAML instead of the Go types | `check-crd-sync.py` fails, and the operator ignores the field | Change the type, regenerate, copy down (§1→§3) |
 | Copied the base over the chart file and lost the annotation | `helm uninstall` would delete the CRD and all CRs | Re-add `helm.sh/resource-policy: keep` (the sync check catches it) |
-| Regenerated only one operator | event-gateway's base still carries the old `WebhookConnector` schema | `make manifests generate` in **both** operator dirs |
-| Changed types without `make generate` | `go build` fails on a missing `DeepCopyObject` field | `make generate` in the module that owns the type |
+| Regenerated only one operator | event-gateway's base still carries the old `WebhookConnector` schema | `make manifests` in **both** operator dirs |
+| Changed types without regenerating shared deepcopy | `go build` fails on a missing `DeepCopyObject` field | Run controller-gen explicitly against `../../shared/api/...` from `operators/agent` |
 | Required field added to an existing CRD | Existing CRs fail validation on upgrade | `+optional` with a default, or migrate first |
 | New field not in `docs/crd-reference.md` | Users cannot discover it; the next agent re-derives it wrongly | §4 is part of the change |
 | Treated `Trigger`/`CronTrigger` as CRDs | You edit manifests nothing reads | They are DB-backed — hub migrations instead |
