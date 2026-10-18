@@ -74,6 +74,8 @@ spec:
               value: {{ .Values.auth.oidcIssuer | quote }}
             - name: OIDC_AUDIENCE
               value: {{ .Values.auth.oidcAudience | default .Values.auth.oidcProjectId | default .Values.auth.oidcClientId | quote }}
+            - name: OIDC_SIGNING_ALGS
+              value: {{ .Values.auth.oidcSigningAlgs | quote }}
             - name: OIDC_CLIENT_ID
               value: {{ .Values.auth.oidcClientId | quote }}
             - name: OIDC_ROLES_CLAIM

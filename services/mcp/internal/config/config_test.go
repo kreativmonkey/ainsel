@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("OIDC_ISSUER", "https://auth.test")
 	t.Setenv("OIDC_PROJECT_ID", "proj-123")
+	t.Setenv("OIDC_AUDIENCE", "")
+	t.Setenv("OIDC_SIGNING_ALGS", " ES256, EdDSA ")
 	t.Setenv("HUB_URL", "http://hub-backend.test:8080")
 
 	cfg := config.Load()
@@ -18,6 +21,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.OIDCAudience != "proj-123" {
 		t.Errorf("OIDCAudience = %q; want proj-123", cfg.OIDCAudience)
+	}
+	if !slices.Equal(cfg.OIDCSigningAlgs, []string{"ES256", "EdDSA"}) {
+		t.Errorf("OIDCSigningAlgs = %v; want [ES256 EdDSA]", cfg.OIDCSigningAlgs)
 	}
 	if cfg.HubURL != "http://hub-backend.test:8080" {
 		t.Errorf("HubURL = %q; want http://hub-backend.test:8080", cfg.HubURL)

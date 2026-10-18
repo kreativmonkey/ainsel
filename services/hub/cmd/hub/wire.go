@@ -270,6 +270,7 @@ func wireOIDCAuth(c *container, issuer, audience string) error {
 		Issuer:      issuer,
 		Audience:    audience,
 		RolesClaim:  os.Getenv("OIDC_ROLES_CLAIM"),
+		SigningAlgs: oidc.FromEnvironment().SigningAlgs,
 		JWKSURL:     jwksURL,
 		UserInfoURL: userInfoURL,
 	})

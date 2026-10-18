@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -99,7 +100,7 @@ func TestOAuthASMetadataHandler(t *testing.T) {
 func discoveryServer(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"jwks_uri":"https://idp.test/custom/keys","authorization_endpoint":"https://idp.test/custom/authorize","token_endpoint":"https://idp.test/custom/token","userinfo_endpoint":"https://idp.test/custom/userinfo"}`))
+		_, _ = fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":"https://idp.test/custom/keys","authorization_endpoint":"https://idp.test/custom/authorize","token_endpoint":"https://idp.test/custom/token","userinfo_endpoint":"https://idp.test/custom/userinfo"}`, "http://"+r.Host)
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL

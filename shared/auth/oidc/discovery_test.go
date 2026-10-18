@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,11 +15,11 @@ func TestFetchDiscovery(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"issuer": "https://idp.example.com",
+		_, _ = fmt.Fprintf(w, `{
+			"issuer": %q,
 			"jwks_uri": "https://idp.example.com/oauth/v2/keys",
 			"userinfo_endpoint": "https://idp.example.com/oidc/v1/userinfo"
-		}`))
+		}`, "http://"+r.Host)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -58,7 +59,7 @@ func TestFetchDiscoveryInvalidJSON(t *testing.T) {
 
 func TestFetchDiscoveryMissingJWKS(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"issuer":"https://idp.example.com"}`))
+		_, _ = fmt.Fprintf(w, `{"issuer":%q}`, "http://"+r.Host)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -69,11 +70,11 @@ func TestFetchDiscoveryMissingJWKS(t *testing.T) {
 
 func TestResolveEndpointsUsesDiscovery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"issuer": "https://idp.example.com",
+		_, _ = fmt.Fprintf(w, `{
+			"issuer": %q,
 			"jwks_uri": "https://idp.example.com/custom/keys",
 			"userinfo_endpoint": "https://idp.example.com/custom/userinfo"
-		}`))
+		}`, "http://"+r.Host)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -103,10 +104,10 @@ func TestResolveEndpointsErrorOnFailure(t *testing.T) {
 
 func TestResolveEndpointsMissingUserInfoEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"issuer": "https://idp.example.com",
+		_, _ = fmt.Fprintf(w, `{
+			"issuer": %q,
 			"jwks_uri": "https://idp.example.com/custom/keys"
-		}`))
+		}`, "http://"+r.Host)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -119,5 +120,25 @@ func TestResolveEndpointsMissingUserInfoEndpoint(t *testing.T) {
 	}
 	if userinfo != "" {
 		t.Errorf("userinfo = %q; want empty", userinfo)
+	}
+}
+
+func TestFetchDiscoveryValidatesIssuer(t *testing.T) {
+	for _, tc := range []struct{ name, advertised string }{
+		{"missing", ""}, {"different-provider", "https://other.test"}, {"trailing-slash-mismatch", "self"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				advertised := tc.advertised
+				if advertised == "self" {
+					advertised = "http://" + r.Host + "/application/o/app"
+				}
+				_, _ = fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":"https://provider.test/keys"}`, advertised)
+			}))
+			defer server.Close()
+			if _, err := FetchDiscovery(context.Background(), nil, server.URL+"/application/o/app/"); err == nil {
+				t.Fatal("must reject mismatching issuer")
+			}
+		})
 	}
 }

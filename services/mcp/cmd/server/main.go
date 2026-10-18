@@ -55,6 +55,7 @@ func main() {
 		Issuer:              cfg.OIDCIssuer,
 		Audience:            cfg.OIDCAudience,
 		RolesClaim:          cfg.OIDCRolesClaim,
+		SigningAlgs:         cfg.OIDCSigningAlgs,
 		ResourceMetadataURL: metadataURL,
 		JWKSURL:             jwksURL,
 		UserInfoURL:         userInfoURL,

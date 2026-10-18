@@ -107,6 +107,9 @@ The `/mcp` endpoint is protected. Two token types are accepted:
 1. **OIDC access token (JWT).** The default path for interactive local
    agents. The server validates the JWT against the configured OIDC
    issuer's JWKS and requires `OIDC_AUDIENCE` in the `aud` claim.
+   Opaque access tokens and token introspection are not supported. The
+   discovery issuer must exactly match `OIDC_ISSUER`, including a trailing
+   slash, and userinfo claims are used only when `sub` matches the JWT.
    Public clients use authorization-code flow with PKCE at the configured
    provider. Set `mcp.externalUrl` to enable protected-resource metadata at
    `/.well-known/oauth-protected-resource<resource-path>` (plus a root alias).
@@ -132,9 +135,19 @@ Required server-side env vars (set by the Helm chart):
 | `OIDC_AUDIENCE` | Required token audience; falls back to legacy `OIDC_PROJECT_ID`, then `OIDC_CLIENT_ID` |
 | `OIDC_CLIENT_ID` | Public client ID; default audience when no audience/project ID is set |
 | `OIDC_SCOPES` | Space-separated scopes advertised to MCP clients |
-| `OIDC_ROLES_CLAIM` | Optional JWT role/group claim; informational, not hub permissions |
+| `OIDC_SIGNING_ALGS` | Comma-separated signing algorithm allowlist; default `RS256` |
+| `OIDC_ROLES_CLAIM` | JWT role/group claim; default `urn:zitadel:iam:org:project:roles`. Exact claim key first, then dotted nested path; informational, not hub permissions |
 | `MCP_RESOURCE_URL` | Public MCP URL; enables RFC 9728 metadata and bearer challenge link |
 | `INTERNAL_VALIDATE_SECRET` | Shared secret with the hub for `ainsel_` token validation |
+
+The signing allowlist supports `RS256`, `RS384`, `RS512`, `PS256`, `PS384`,
+`PS512`, `ES256`, `ES384`, `ES512`, and `EdDSA`. `HS*`, `none`, and unknown
+algorithms fail startup. Configure the same audience and signing allowlist
+on MCP and the hub, since MCP forwards bearer tokens to the hub. For
+Authentik, use the per-provider issuer and an asymmetric signing key; for
+Zitadel, enable JWT access tokens and retain the project audience/scope.
+See [OIDC deployment configuration](deployment.md#oidc-organization-sso)
+for public PKCE client setup, refresh-token scopes and claim mappings.
 
 ## What you can do with the agent
 

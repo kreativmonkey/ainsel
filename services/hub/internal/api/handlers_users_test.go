@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -557,5 +558,31 @@ func TestIdentityPersistMiddleware_WireOrder(t *testing.T) {
 	}
 	if u.Username != "wireuser" {
 		t.Errorf("want username wireuser, got %q", u.Username)
+	}
+}
+
+func TestHandleUserSyncRejectsUserInfoSubjectMismatch(t *testing.T) {
+	for _, subject := range []any{nil, "", "another-user", 123} {
+		t.Run(fmt.Sprint(subject), func(t *testing.T) {
+			userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"sub": subject, "preferred_username": "wrong identity"})
+			}))
+			defer userinfo.Close()
+			s := userSyncTestServer(t)
+			s.userInfoURL = userinfo.URL
+			s.userInfoClient = userinfo.Client()
+			s.mux.HandleFunc("/api/v1/users/", s.handleUser)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/sync", nil)
+			ctx := oidc.ContextWithUser(req.Context(), &oidc.User{Sub: "alice", Username: "Alice"})
+			req = req.WithContext(oidc.ContextWithToken(ctx, "access-token"))
+			rec := httptest.NewRecorder()
+			s.mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status %d, want 401: %s", rec.Code, rec.Body.String())
+			}
+			if users := s.authzStore.(*fakeAuthzStore).users; len(users) != 0 {
+				t.Fatalf("userinfo mismatch persisted users: %+v", users)
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise deployment auth contracts with real shell, nginx, MCP and Helm."""
+"""Exercise OIDC deployment contracts with real shell, MCP and Helm."""
 
 import json
 import os
@@ -107,7 +107,7 @@ class DeploymentTests(unittest.TestCase):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 if self.path.endswith("openid-configuration"):
-                    self.wfile.write(json.dumps({"jwks_uri": f"http://127.0.0.1:{self.server.server_port}/custom/keys"}).encode())
+                    self.wfile.write(json.dumps({"issuer": f"http://127.0.0.1:{self.server.server_port}/provider/", "jwks_uri": f"http://127.0.0.1:{self.server.server_port}/custom/keys"}).encode())
                 else:
                     self.wfile.write(b'{"keys":[]}')
 
@@ -121,7 +121,7 @@ class DeploymentTests(unittest.TestCase):
                 binary = str(Path(temp, "mcp"))
                 subprocess.run(["go", "build", "-o", binary, "./cmd/server"], cwd=ROOT / "services/mcp", check=True)
                 listen = port()
-                env = {**os.environ, "PORT": str(listen), "OIDC_ISSUER": f"http://127.0.0.1:{provider.server_port}/provider/", "OIDC_AUDIENCE": "app", "OIDC_PROJECT_ID": "", "OIDC_CLIENT_ID": "app", "MCP_RESOURCE_URL": "https://app.test/mcp", "OIDC_SCOPES": "openid email offline_access", "INTERNAL_VALIDATE_SECRET": ""}
+                env = {**os.environ, "PORT": str(listen), "OIDC_ISSUER": f"http://127.0.0.1:{provider.server_port}/provider/", "OIDC_AUDIENCE": "app", "OIDC_PROJECT_ID": "", "OIDC_CLIENT_ID": "app", "OIDC_SIGNING_ALGS": "RS256", "MCP_RESOURCE_URL": "https://app.test/mcp", "OIDC_SCOPES": "openid email offline_access", "INTERNAL_VALIDATE_SECRET": ""}
                 process = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 try:
                     root = f"http://127.0.0.1:{listen}"
@@ -142,6 +142,38 @@ class DeploymentTests(unittest.TestCase):
             provider.shutdown()
             provider.server_close()
 
+    def test_chart_generic_oidc(self):
+        args = ["helm", "template", "chart/", "--set", "auth.mode=oidc", "--set", "auth.oidcIssuer=https://idp.test/provider/", "--set", "auth.oidcClientId=app", "--set", "mcp.enabled=true", "--set", "mcp.externalUrl=https://app.test/mcp"]
+        rendered = subprocess.check_output(args, cwd=ROOT, text=True)
+        self.assertIn('name: OIDC_AUDIENCE\n              value: "app"', rendered)
+        self.assertIn('value: "openid profile email offline_access"', rendered)
+        self.assertNotIn('urn:zitadel:iam:org:project:id:', rendered)
+        result = subprocess.run(args + ["--set", "auth.oidcClientId="], cwd=ROOT, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, "OIDC without an audience must fail rendering")
+
+    def test_chart_oidc_validation_settings(self):
+        args = ["helm", "template", "chart/", "--set", "auth.mode=oidc", "--set", "auth.oidcIssuer=https://idp.test/provider/", "--set", "auth.oidcClientId=app", "--set", "mcp.enabled=true"]
+
+        def deployments(rendered):
+            return [document for document in rendered.split("\n---\n")
+                    if "kind: Deployment\n" in document and
+                    ("  name: hub-backend\n" in document or "  name: ainsel-mcp\n" in document)]
+
+        for settings, audience, algorithms, roles, scopes in (
+            ([], "app", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
+            (["--set", "auth.oidcSigningAlgs="], "app", "", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
+            (["--set", "auth.oidcProjectId=legacy-project"], "legacy-project", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email urn:zitadel:iam:org:project:id:legacy-project:aud"),
+            (["--set", "auth.oidcProjectId=legacy-project", "--set", "auth.oidcAudience=api", "--set", r"auth.oidcSigningAlgs=RS256\,ES256", "--set", "auth.oidcRolesClaim=realm_access.roles", "--set", "auth.oidcScopes=openid email custom:audience"], "api", "RS256,ES256", "realm_access.roles", "openid email custom:audience"),
+        ):
+            with self.subTest(audience=audience, algorithms=algorithms):
+                rendered = subprocess.check_output(args + settings, cwd=ROOT, text=True)
+                manifests = deployments(rendered)
+                self.assertEqual(len(manifests), 2)
+                for manifest in manifests:
+                    for name, value in (("OIDC_AUDIENCE", audience), ("OIDC_SIGNING_ALGS", algorithms), ("OIDC_ROLES_CLAIM", roles)):
+                        self.assertIn(f'name: {name}\n              value: "{value}"', manifest)
+                self.assertEqual(rendered.count(f'name: OIDC_SCOPES\n              value: "{scopes}"'), 2)
+
     def test_chart_generic_oidc_external_database(self):
         args = ["helm", "template", "chart/", "--set", "auth.mode=oidc", "--set", "auth.oidcIssuer=https://idp.test/provider/", "--set", "auth.oidcClientId=app", "--set", "mcp.enabled=true", "--set", "mcp.externalUrl=https://app.test/mcp", "--set", "postgres.enabled=false", "--set", "postgres.host=external-rw", "--set", "postgres.port=5433", "--set", "postgres.auth.existingSecret=external-db"]
         rendered = subprocess.check_output(args, cwd=ROOT, text=True)
@@ -158,7 +190,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn(setting, wait_postgres)
         self.assertNotIn("runAsUser: 0", wait_postgres)
         self.assertIn('value: "openid profile email offline_access"', rendered)
-        self.assertNotIn('urn:zitadel:', rendered)
+        self.assertNotIn('urn:zitadel:iam:org:project:id:', rendered)
         result = subprocess.run(args + ["--set", "auth.oidcClientId="], cwd=ROOT, capture_output=True)
         self.assertNotEqual(result.returncode, 0, "OIDC without an audience must fail rendering")
 

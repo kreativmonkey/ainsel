@@ -172,31 +172,61 @@ auth:
   oidcClientId: "ainsel"
   # Defaults to the client ID; set when the provider issues another aud claim.
   oidcAudience: "ainsel"
+  oidcSigningAlgs: "RS256"
   oidcScopes: "openid profile email offline_access"
   # Optional, informational role/group claim; does not grant hub permissions.
   oidcRolesClaim: "groups"
 ```
 
-Any OIDC provider that exposes a standard discovery endpoint
-(`/.well-known/openid-configuration`) is supported — for example Zitadel,
-Authentik, Keycloak, or Dex. The frontend reads the same values from the
-chart-rendered `runtime-config.js` and uses them to drive the login flow.
+OIDC providers must expose discovery (`/.well-known/openid-configuration`)
+and issue signed JWT **access tokens** with the configured audience and
+algorithm. Opaque access tokens and token introspection are not supported.
+The frontend reads the issuer, client ID and scopes from the chart-rendered
+`runtime-config.js` and uses them to drive the login flow.
+
+Where supported, configure a separate API audience and set `oidcAudience`
+to it. AInsel validates signature, issuer, audience, expiry and subject;
+it cannot universally distinguish an ID token from an access token with
+the same audience. OIDC has no provider-independent access-token type
+claim. Clients must send the access token, not the ID token.
 
 Register a **public** authorization-code client with PKCE (S256); the SPA
 cannot keep a client secret. Register `https://<host><basePath>/auth/callback`
 as the redirect URI and `https://<host><basePath>/` for logout. Preserve the
-issuer exactly as discovery reports it, including its trailing slash. JWT
-access tokens must use RS256 and include the configured audience. For
-Authentik, configure a signing key and the `offline_access` scope mapping
-when refresh tokens are wanted.
+issuer exactly as discovery reports it, including its trailing slash: a
+discovery issuer mismatch fails startup. Userinfo responses must have the
+same `sub` as the validated JWT before their identity claims are used.
+
+`auth.oidcSigningAlgs` is a comma-separated allowlist, defaulting to `RS256`.
+Supported algorithms are `RS256`, `RS384`, `RS512`, `PS256`, `PS384`,
+`PS512`, `ES256`, `ES384`, `ES512`, and `EdDSA`. Select only the algorithms
+your provider uses. Empty lists or entries, `HS*`, `none`, and unknown
+algorithms fail startup.
+
+For **Authentik**, use the per-provider issuer shown in discovery, typically
+`https://<authentik-host>/application/o/<application-slug>/`, and a public
+client. Select an asymmetric signing key, leave token encryption disabled,
+and include the `offline_access` scope mapping when refresh tokens are
+wanted. Set `oidcRolesClaim: groups` if your scope mapping emits a groups
+array in the access token. See the [Authentik OAuth2 provider guide](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/).
 
 `auth.oidcProjectId` is an optional legacy Zitadel compatibility setting. It
 supplies the audience and project scope only when explicitly set; other
-providers need no project ID. `OIDC_ISSUER` / `OIDC_AUDIENCE` are the common
+providers need no project ID. Configure **Zitadel** to issue JWT access
+tokens; its project ID remains the audience when both legacy project and
+client IDs are configured. The default scopes then include
+`urn:zitadel:iam:org:project:id:<project-id>:aud`. An explicit `oidcAudience`
+or `oidcScopes` overrides the corresponding default.
+`OIDC_ISSUER` / `OIDC_AUDIENCE` are the common
 service environment variables. Existing `ZITADEL_ISSUER` / `OIDC_PROJECT_ID`
 remain aliases, with the neutral variables taking precedence.
 
-JWT roles (default `roles`, or `auth.oidcRolesClaim`) are informational.
+JWT roles default to the legacy `urn:zitadel:iam:org:project:roles` claim.
+Use `auth.oidcRolesClaim` for another claim, such as `groups` or the nested
+path `realm_access.roles`. An exact claim key takes precedence over dotted
+path traversal, so namespaced keys containing dots remain usable. Role
+arrays contain strings; role objects use their keys as role names. Roles
+are informational.
 Administration and resource permissions remain explicit records in the hub
 DB; an IdP group alone does not grant admin access.
 

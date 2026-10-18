@@ -1,12 +1,19 @@
 package auth_test
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ainsel-project/ainsel/services/mcp/internal/auth"
+	"github.com/ainsel-project/ainsel/shared/auth/oidc"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestNewMiddlewareRejectsMissingToken_AddsWWWAuthenticate(t *testing.T) {
@@ -48,6 +55,62 @@ func TestNewMiddlewareRejectsMissingToken_AddsWWWAuthenticate(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "missing bearer token") {
 		t.Errorf("body = %q; want contains 'missing bearer token'", rec.Body.String())
+	}
+}
+
+func TestNewMiddlewareConfiguredSigningAlgorithm(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]string{
+			"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": "ed25519",
+			"x": base64.RawURLEncoding.EncodeToString(publicKey),
+		}}})
+	}))
+	t.Cleanup(jwksServer.Close)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{
+		"iss": jwksServer.URL, "aud": "ainsel", "sub": "alice",
+		"exp": time.Now().Add(time.Minute).Unix(),
+	})
+	token.Header["kid"] = "ed25519"
+	raw, err := token.SignedString(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		algorithms []string
+		status     int
+	}{
+		{"explicit EdDSA", []string{"EdDSA"}, http.StatusOK},
+		{"default RS256 rejects EdDSA", nil, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mw, err := auth.NewMiddleware(auth.Config{
+				Issuer: jwksServer.URL, Audience: "ainsel", JWKSURL: jwksServer.URL,
+				SigningAlgs: tc.algorithms,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				u, ok := oidc.FromContext(r.Context())
+				if !ok || u.Sub != "alice" {
+					t.Errorf("authenticated identity = %v; want alice", u)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+			req.Header.Set("Authorization", "Bearer "+raw)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Errorf("status = %d; want %d", rec.Code, tc.status)
+			}
+		})
 	}
 }
 

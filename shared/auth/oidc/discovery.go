@@ -55,6 +55,9 @@ func FetchDiscovery(ctx context.Context, client *http.Client, issuer string) (*D
 	if err := json.Unmarshal(body, &d); err != nil {
 		return nil, fmt.Errorf("oidc discovery: parse: %w", err)
 	}
+	if d.Issuer != issuer {
+		return nil, fmt.Errorf("oidc discovery: issuer %q does not match configured issuer %q", d.Issuer, issuer)
+	}
 	if d.JWKSURI == "" {
 		return nil, fmt.Errorf("oidc discovery: jwks_uri missing in %s", url)
 	}

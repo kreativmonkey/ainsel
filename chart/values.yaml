@@ -374,12 +374,16 @@ auth:
   oidcClientId: ""
   # Expected JWT audience; defaults to oidcProjectId, then oidcClientId.
   oidcAudience: ""
+  # Comma-separated JWT signing algorithm allowlist; asymmetric algorithms only.
+  # Supported: RS256/384/512, PS256/384/512, ES256/384/512, EdDSA.
+  oidcSigningAlgs: "RS256"
   # Space-separated scopes; empty uses standard scopes, or legacy project scope
   # when oidcProjectId is supplied. Set explicitly for provider-specific scopes.
   oidcScopes: ""
-  # Optional JWT claim containing role strings or object keys (e.g. groups).
+  # JWT claim containing role strings or object keys (e.g. groups).
+  # Exact claim keys take precedence over dotted nested paths.
   # Roles are informational; application permissions are managed in the hub DB.
-  oidcRolesClaim: ""
+  oidcRolesClaim: "urn:zitadel:iam:org:project:roles"
   # Deprecated Zitadel compatibility alias; not required for other providers.
   oidcProjectId: ""
   # Allow the hub backend to run WITHOUT auth middleware (sets
