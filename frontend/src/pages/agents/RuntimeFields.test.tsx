@@ -34,4 +34,17 @@ describe('subscription runtime', () => {
     expect(buildAgentRequest(values, { isEdit: true }).runtime).toEqual(input.runtime)
     expect(agentSchema.safeParse({ ...input, runtime: { engine: 'codex' } }).success).toBe(false)
   })
+  it('does not submit a stale API key or Pi settings for either native engine', () => {
+    for (const engine of ['codex', 'claude'] as const) {
+      const values = agentSchema.parse({ ...agentDefaults, name: 'Agent', imageRef: { name: 'image' },
+        llm: { model: 'model', provider: 'custom', vision: true, contextWindow: 100000, temperature: 1 },
+        providerApiKey: 'stale-key', customProviderUrl: '', persona: { id: 'persona' },
+        runtime: { engine, subscription: { claimName: 'private-home', login: false } } })
+      const body = buildAgentRequest(values, { isEdit: false })
+      expect(body.llm).toEqual({ model: 'model', provider: engine })
+      expect(JSON.stringify(body)).not.toContain('stale-key')
+      expect(body.customProvider).toBeUndefined()
+    }
+  })
+
 })

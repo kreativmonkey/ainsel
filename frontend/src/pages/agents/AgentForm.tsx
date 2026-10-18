@@ -95,6 +95,7 @@ export function AgentForm() {
   })
 
   const provider = watch('llm.provider')
+  const nativeRuntime = (watch('runtime.engine') ?? 'pi') !== 'pi'
 
   return (
     <>
@@ -190,7 +191,12 @@ export function AgentForm() {
           </div>
           <RuntimeFields
             value={watch('runtime') ?? { engine: 'pi' }}
-            onChange={(value) => setValue('runtime', value, { shouldDirty: true })}
+            onChange={(value) => {
+                      setValue('runtime', value, { shouldDirty: true })
+                      if (value.engine === 'pi' && (provider === 'codex' || provider === 'claude')) {
+                        setValue('llm.provider', '', { shouldDirty: true })
+                      }
+                    }}
             error={errors.runtime?.subscription?.claimName?.message}
           />
           <p className="label" style={{ marginTop: 12, color: 'var(--ink-3)' }}>
@@ -216,7 +222,8 @@ export function AgentForm() {
                 {...register('llm.maxTurns')}
               />
             </Field>
-            <Field label="Temperature" htmlFor="llm.temperature">
+            {!nativeRuntime ? <>
+<Field label="Temperature" htmlFor="llm.temperature">
               <Input
                 id="llm.temperature"
                 type="number"
@@ -240,8 +247,10 @@ export function AgentForm() {
                 {...register('llm.contextWindow')}
               />
             </Field>
+</> : null}
           </div>
-          <div className="form-grid" style={{ marginTop: 16 }}>
+          {!nativeRuntime ? (
+<div className="form-grid" style={{ marginTop: 16 }}>
             <Field label="Provider" htmlFor="llm.provider">
               <Select
                 id="llm.provider"
@@ -299,6 +308,7 @@ export function AgentForm() {
               </div>
             </Field>
           </div>
+          ) : null}
         </section>
 
         <section className="form-section">

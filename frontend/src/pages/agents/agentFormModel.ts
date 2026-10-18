@@ -78,7 +78,7 @@ export const agentSchema = z
     if (data.runtime?.engine !== undefined && data.runtime.engine !== 'pi' && !data.runtime.subscription?.claimName.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime', 'subscription', 'claimName'], message: 'Credential PVC is required' })
     }
-    if (data.llm.provider === 'custom' && !data.customProviderUrl?.trim()) {
+    if ((!data.runtime || data.runtime.engine === 'pi') && data.llm.provider === 'custom' && !data.customProviderUrl?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['customProviderUrl'],
@@ -126,7 +126,8 @@ export function buildAgentRequest(
   values: AgentFormValues,
   opts: { isEdit: boolean },
 ): AgentRequest {
-  const provider = values.llm.provider ?? ''
+  const nativeEngine = values.runtime?.engine !== 'pi' ? values.runtime?.engine : undefined
+  const provider = nativeEngine ?? values.llm.provider ?? ''
   const apiKey = values.providerApiKey ?? ''
   const key = apiKey ? { apiKey } : undefined
 
@@ -145,7 +146,9 @@ export function buildAgentRequest(
     description: values.description || undefined,
     imageRef: values.imageRef,
     runtime: values.runtime,
-    llm: values.llm,
+    llm: nativeEngine
+      ? { model: values.llm.model, provider: nativeEngine, maxTurns: values.llm.maxTurns }
+      : values.llm,
     ollamaCloud,
     openCode,
     alibabaCloud,

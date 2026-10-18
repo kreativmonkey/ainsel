@@ -119,6 +119,7 @@ export function AgentWizard() {
   const selectedImage = watch('imageRef.name')
   const image = useAgentImage(selectedImage || undefined)
   const provider = watch('llm.provider')
+  const nativeRuntime = (watch('runtime.engine') ?? 'pi') !== 'pi'
 
   const goTo = (index: number) => {
     const id = STEP_IDS[index]
@@ -322,7 +323,12 @@ export function AgentWizard() {
                   </Field>
                   <RuntimeFields
                     value={watch('runtime') ?? { engine: 'pi' }}
-                    onChange={(value) => setValue('runtime', value, { shouldDirty: true })}
+                    onChange={(value) => {
+                      setValue('runtime', value, { shouldDirty: true })
+                      if (value.engine === 'pi' && (provider === 'codex' || provider === 'claude')) {
+                        setValue('llm.provider', '', { shouldDirty: true })
+                      }
+                    }}
                     error={errors.runtime?.subscription?.claimName?.message}
                   />
                 </div>
@@ -371,7 +377,8 @@ export function AgentWizard() {
                   <Field label="Max Turns" htmlFor="llm.maxTurns">
                     <Input id="llm.maxTurns" type="number" min={1} {...register('llm.maxTurns')} />
                   </Field>
-                  <Field label="Temperature" htmlFor="llm.temperature">
+                  {!nativeRuntime ? <>
+<Field label="Temperature" htmlFor="llm.temperature">
                     <Input
                       id="llm.temperature"
                       type="number"
@@ -395,8 +402,10 @@ export function AgentWizard() {
                       {...register('llm.contextWindow')}
                     />
                   </Field>
+</> : null}
                 </div>
-                <div className="form-grid" style={{ marginTop: 16 }}>
+                {!nativeRuntime ? <>
+<div className="form-grid" style={{ marginTop: 16 }}>
                   <Field label="Provider" htmlFor="llm.provider">
                     <Select
                       id="llm.provider"
@@ -455,6 +464,7 @@ export function AgentWizard() {
                     </div>
                   </Field>
                 </div>
+                </> : null}
               </>
             ) : null}
 
@@ -507,8 +517,8 @@ export function AgentWizard() {
                   <dt style={{ color: 'var(--ink-3)' }}>Model</dt>
                   <dd style={{ margin: 0 }}>
                     {watch('llm.model') || '—'}
-                    {provider ? ` · ${provider}` : ''}
-                    {watch('llm.vision') ? ' · images on' : ''}
+                    {nativeRuntime ? ` · ${watch('runtime.engine')}` : provider ? ` · ${provider}` : ''}
+                    {!nativeRuntime && watch('llm.vision') ? ' · images on' : ''}
                   </dd>
                   <dt style={{ color: 'var(--ink-3)' }}>Persona</dt>
                   <dd style={{ margin: 0 }}>

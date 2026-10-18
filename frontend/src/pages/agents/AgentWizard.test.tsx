@@ -168,6 +168,23 @@ describe('AgentWizard', () => {
     vi.unstubAllGlobals()
   })
 
+  it('hides Pi-only model settings for a native subscription runtime', async () => {
+    const user = userEvent.setup()
+    renderWizard()
+    await user.type(await screen.findByLabelText('Name'), 'native-agent')
+    await selectGroup(user)
+    await user.click(next())
+    await selectImage(user)
+    await user.selectOptions(screen.getByLabelText('Agent runtime'), 'codex')
+    await user.type(screen.getByLabelText('Credential PVC'), 'private-home')
+    await user.click(next())
+    expect(await screen.findByLabelText('Model')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^provider$/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Context Window')).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /image input/i })).not.toBeInTheDocument()
+  })
+
   it('starts on the identity step and shows every step in order', async () => {
     renderWizard()
     const steps = await screen.findByRole('list', { name: /creation steps/i })

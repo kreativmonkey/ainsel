@@ -76,7 +76,7 @@ function RuntimeSettings({ agent }: AgentImageSectionProps) {
   return <Panel title="Subscription runtime" className="cropped">
     <RuntimeFields value={runtime} onChange={setRuntime} />
     <Button disabled={update.isPending || (runtime.engine !== 'pi' && !runtime.subscription?.claimName.trim())}
-      onClick={() => update.mutate({ id: agent.id, body: { name: agent.name, runtime } })}>
+      onClick={() => update.mutate({ id: agent.id, body: { name: agent.name, runtime, llm: { model: agent.llm?.model ?? '', provider: runtime.engine === 'pi' ? '' : runtime.engine } } })}>
       {update.isPending ? 'Saving…' : 'Save runtime'}
     </Button>
     {update.error ? <p role="alert">{update.error.message}</p> : null}
