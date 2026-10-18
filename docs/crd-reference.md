@@ -34,6 +34,7 @@ for its container image and tool catalog.
 | `runtime.engine` | string | No | Task runtime: `pi` (default), `codex`, or `claude`. Native engines require an image containing the official CLI and `/opt/ainsel/subscription/runner.mjs` |
 | `runtime.subscription.claimName` | string | Native engines | Existing dedicated `ReadWriteOncePod` PVC for the CLI home; mounted only into the agent container at `/home/agent`. Retained independently of the Agent |
 | `runtime.subscription.login` | bool | No | Default false. Drain existing task Jobs, withhold new dispatch and create `login-<agent>-0` pod for direct end-user CLI sign-in. False removes the login pod before resuming tasks |
+| `runtime.sandboxProfile` | string | No | Administrator-only opt-in `codex`: requires `runtime.engine: codex` and hardening enabled. Pins task and login pods to the protected Codex worker label, tolerates its dedicated taint, and uses the Localhost seccomp profile. Omitted preserves current scheduling and RuntimeDefault. See [sandbox workers](#codex-sandbox-workers) |
 | `runtime.imagePullPolicy` | string | No | Kubernetes image pull policy (`Always`, `Never`, `IfNotPresent`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits for the agent pod |
 | `llm.model` | string | Yes | LLM model identifier (e.g. `unsloth/gpt-oss-120b-GGUF:F16`) |
@@ -459,3 +460,41 @@ review context. Set `AINSEL_REVIEW_REPO` (for example,
 `kreativmonkey/ainsel`) on the Agent to restrict which repository it will
 review. Findings appear in the AInsel task transcript; this runtime does not
 post GitHub review comments.
+
+### Codex sandbox workers
+
+An administrator with Kubernetes access can set `spec.runtime.sandboxProfile: codex`.
+The hub REST API and AInsel MCP deliberately do not expose this infrastructure
+setting; hub agent updates preserve it. `AgentImage.tools` is a catalog of
+programs in the image and does not grant Linux permissions or install programs.
+
+Provision a dedicated worker before enabling the profile:
+
+- Enable Linux user namespaces on that worker and install a reviewed seccomp
+  allowlist at `profiles/ainsel-codex.json` relative to the kubelet seccomp root.
+  It must permit the namespace and mount operations required by Codex's sandbox.
+  Also verify the host LSM (for example SELinux) allows these operations;
+  seccomp and sysctls alone do not establish sandbox readiness.
+- Apply the taint `ainsel.dev/sandbox=codex:NoSchedule`.
+- After verifying the sandbox on the worker, set the protected node label
+  `ainsel.dev.node-restriction.kubernetes.io/codex-sandbox=true` using administrator
+  credentials. Enable NodeRestriction so kubelets cannot assign this label.
+
+```sh
+kubectl -n ainsel patch agent <agent-name> --type=merge \
+  -p '{"spec":{"runtime":{"sandboxProfile":"codex"}}}'
+```
+
+The profile requires `runtime.engine: codex` and `runtime.securityHardened` absent
+or true. The operator retains non-root execution, `allowPrivilegeEscalation:
+false`, a read-only root filesystem, dropped capabilities and no service-account
+token. Localhost seccomp is allowed by Kubernetes Pod Security Restricted; the
+profile itself must remain an allowlist. Login pods inherit the same worker
+selection because the authentication PVC may be tied to that node.
+
+There is no fallback: without a matching worker the pod stays Pending; without
+the installed seccomp file the kubelet refuses container creation. Changing the
+profile does not alter already-running task Jobs; drain them before a rollout.
+Remove `sandboxProfile` to restore default scheduling for newly created pods.
+The dedicated node should also reject unrelated workloads through cluster
+admission policy if users can submit arbitrary pods or tolerations.

@@ -29,6 +29,11 @@ func nativeRuntime(agent *api.Agent) bool {
 }
 
 func (r *AgentReconciler) validateSubscription(ctx context.Context, agent *api.Agent) error {
+	if profile := agent.Spec.Runtime.SandboxProfile; profile != "" {
+		if profile != "codex" || agent.Spec.Runtime.Engine != "codex" || (agent.Spec.Runtime.SecurityHardened != nil && !*agent.Spec.Runtime.SecurityHardened) {
+			return fmt.Errorf("sandboxProfile codex requires engine codex and securityHardened enabled")
+		}
+	}
 	sub := agent.Spec.Runtime.Subscription
 	if !nativeRuntime(agent) {
 		if agent.Spec.Runtime.Engine != "" && agent.Spec.Runtime.Engine != "pi" {
@@ -132,6 +137,7 @@ func (r *AgentReconciler) syncSubscriptionLogin(ctx context.Context, agent *api.
 	c.VolumeMounts = []corev1.VolumeMount{{Name: "subscription-home", MountPath: "/home/agent"}, {Name: "tmp", MountPath: "/tmp"}}
 	pod = corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace, Labels: map[string]string{AgentNameLabel: agent.Name, "ainsel.dev/subscription-login": "true"}}, Spec: corev1.PodSpec{
 		Containers: []corev1.Container{c}, SecurityContext: tpl.Spec.SecurityContext,
+		NodeSelector: tpl.Spec.NodeSelector, Tolerations: tpl.Spec.Tolerations,
 		AutomountServiceAccountToken: ptr.To(false), RestartPolicy: corev1.RestartPolicyNever,
 		Volumes: []corev1.Volume{
 			{Name: "subscription-home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: agent.Spec.Runtime.Subscription.ClaimName}}},

@@ -112,7 +112,15 @@ type AgentEnvVar struct {
 // AgentRuntime holds operator-managed runtime configuration for the agent pod.
 // Fields like ImagePullPolicy and Resources are set by the operator or Helm
 // bootstrap — they are not exposed via the hub REST API.
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxProfile) || (has(self.engine) && self.engine == 'codex' && (!has(self.securityHardened) || self.securityHardened))",message="sandboxProfile codex requires engine codex and securityHardened enabled"
 type AgentRuntime struct {
+	// SandboxProfile selects an administrator-provisioned sandbox worker pool.
+	// Codex requires a dedicated labeled node and profiles/ainsel-codex.json
+	// installed under the kubelet seccomp root. Not exposed by the hub or MCP.
+	// +optional
+	// +kubebuilder:validation:Enum=codex
+	SandboxProfile string `json:"sandboxProfile,omitempty"`
+
 	// Engine selects the task runtime. Empty preserves the Pi runtime.
 	// +optional
 	// +kubebuilder:validation:Enum=pi;codex;claude

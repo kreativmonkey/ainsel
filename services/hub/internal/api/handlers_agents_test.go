@@ -1307,3 +1307,27 @@ func TestAgents_MCPScoped(t *testing.T) {
 		t.Fatalf("expected 400 for unknown mcp server on create, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestAgentUpdatePreservesAdministratorSandboxProfile(t *testing.T) {
+	a := &agentv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "sandbox-worker", Namespace: "test-ns"},
+		Spec: agentv1alpha1.AgentSpec{DisplayName: "Worker", ImageRef: agentv1alpha1.AgentImageRef{Name: "img-1"},
+			Runtime: agentv1alpha1.AgentRuntime{Engine: "codex", SandboxProfile: "codex", Subscription: &agentv1alpha1.AgentSubscription{ClaimName: "private-home"}}},
+	}
+	s := testServer(t, a, testAgentImage("img-1"))
+	s.mux.HandleFunc("/api/v1/agents/", s.handleAgent)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/agents/sandbox-worker", strings.NewReader(`{"name":"Renamed","runtime":{"engine":"codex","subscription":{"claimName":"private-home"},"sandboxProfile":"unconfined"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	var stored agentv1alpha1.Agent
+	if err := s.client.Get(context.Background(), types.NamespacedName{Namespace: "test-ns", Name: "sandbox-worker"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec.Runtime.SandboxProfile != "codex" {
+		t.Fatal("API changed administrator sandbox profile")
+	}
+}

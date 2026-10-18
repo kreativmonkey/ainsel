@@ -514,6 +514,16 @@ func (r *AgentReconciler) renderPodTemplate(agent *ainselv1alpha1.Agent, img *ai
 		}
 	}
 
+	var nodeSelector map[string]string
+	var tolerations []corev1.Toleration
+	if agent.Spec.Runtime.SandboxProfile == "codex" {
+		nodeSelector = map[string]string{"ainsel.dev.node-restriction.kubernetes.io/codex-sandbox": "true"}
+		tolerations = []corev1.Toleration{{Key: "ainsel.dev/sandbox", Operator: corev1.TolerationOpEqual, Value: "codex", Effect: corev1.TaintEffectNoSchedule}}
+		podSecContext.SeccompProfile = &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("profiles/ainsel-codex.json"),
+		}
+	}
+
 	// Build volumes, adding /tmp emptyDir when hardening is on.
 	// Copy the slice to avoid mutating the shared backing array.
 	deployVolumes := append([]corev1.Volume{}, plan.podVolumes...)
@@ -557,6 +567,8 @@ func (r *AgentReconciler) renderPodTemplate(agent *ainselv1alpha1.Agent, img *ai
 		},
 		Spec: corev1.PodSpec{
 			SecurityContext:               podSecContext,
+			NodeSelector:                  nodeSelector,
+			Tolerations:                   tolerations,
 			AutomountServiceAccountToken:  subscriptionServiceAccountToken(agent),
 			TerminationGracePeriodSeconds: ptr.To(r.gracePeriod()),
 			InitContainers:                plan.initContainers,

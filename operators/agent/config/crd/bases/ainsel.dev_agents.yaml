@@ -467,6 +467,14 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  sandboxProfile:
+                    description: |-
+                      SandboxProfile selects an administrator-provisioned sandbox worker pool.
+                      Codex requires a dedicated labeled node and profiles/ainsel-codex.json
+                      installed under the kubelet seccomp root. Not exposed by the hub or MCP.
+                    enum:
+                    - codex
+                    type: string
                   securityHardened:
                     description: |-
                       SecurityHardened controls whether the operator applies pod and container
@@ -492,6 +500,11 @@ spec:
                     - claimName
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: sandboxProfile codex requires engine codex and securityHardened
+                    enabled
+                  rule: '!has(self.sandboxProfile) || (has(self.engine) && self.engine
+                    == ''codex'' && (!has(self.securityHardened) || self.securityHardened))'
               scaling:
                 description: |-
                   AgentScaling holds the concurrency policy for the agent's task runs. Every
