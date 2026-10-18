@@ -463,6 +463,26 @@ describe('AgentDetail', () => {
     })
   })
 
+  it('preserves the Pi provider when saving runtime settings', async () => {
+    const putCalls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') putCalls.push(String(init.body))
+      return Promise.resolve(defaultFetch(url, init))
+    }))
+    renderWithProviders(<Routes><Route path="/agents/:id" element={<AgentDetail />} /></Routes>, { route: '/agents/a1' })
+    await screen.findAllByText('doc-writer')
+    await userEvent.click(screen.getByRole('tab', { name: /^runtime$/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save runtime' }))
+    await waitFor(() => expect(putCalls).toHaveLength(1))
+    expect(JSON.parse(putCalls[0]).llm.provider).toBe('ollama-cloud')
+    await userEvent.click(screen.getByLabelText('ChatGPT subscription'))
+    await userEvent.type(screen.getByLabelText('Credential PVC'), 'pi-auth')
+    await userEvent.click(screen.getByRole('button', { name: 'Save runtime' }))
+    await waitFor(() => expect(putCalls).toHaveLength(2))
+    expect(JSON.parse(putCalls[1]).llm.provider).toBe('openai-codex')
+    expect(JSON.parse(putCalls[1]).runtime).toEqual({ engine: 'pi', subscription: { claimName: 'pi-auth', login: false } })
+  })
+
   it('opens the Runtime tab with image identity and env, and switches images', async () => {
     const putCalls: Array<{ url: string; body?: string }> = []
     vi.stubGlobal(

@@ -21,8 +21,27 @@ describe('subscription runtime', () => {
     expect(screen.getByRole('status')).toHaveTextContent('"login":true')
     expect(screen.getByRole('status')).toHaveTextContent('"claimName":"private-home"')
     await user.selectOptions(screen.getByLabelText('Agent runtime'), 'pi')
+    expect(screen.getByLabelText('Credential PVC')).toHaveValue('private-home')
+    expect(screen.getByRole('status')).toHaveTextContent('"engine":"pi"')
+    await user.click(screen.getByLabelText('ChatGPT subscription'))
     expect(screen.queryByLabelText('Credential PVC')).not.toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('{"engine":"pi"}')
+  })
+
+  it('enables Pi subscription credentials and validates the provider claim', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByLabelText('ChatGPT subscription'))
+    await user.type(screen.getByLabelText('Credential PVC'), 'pi-auth')
+    await user.click(screen.getByLabelText(/Login mode/))
+    expect(screen.getByRole('status')).toHaveTextContent('"engine":"pi"')
+    expect(screen.getByRole('status')).toHaveTextContent('"claimName":"pi-auth"')
+    const input = { ...agentDefaults, name: 'Agent', imageRef: { name: 'image' },
+      llm: { model: 'gpt-5', provider: 'openai-codex' }, persona: { id: 'persona' },
+      runtime: { engine: 'pi', subscription: { claimName: 'pi-auth', login: true } } }
+    const values = agentSchema.parse(input)
+    expect(buildAgentRequest(values, { isEdit: false }).llm?.provider).toBe('openai-codex')
+    expect(buildAgentRequest(values, { isEdit: true }).runtime).toEqual(input.runtime)
+    expect(agentSchema.safeParse({ ...input, runtime: { engine: 'pi' } }).success).toBe(false)
   })
 
   it('validates the claim and carries the runtime in create and edit requests', () => {

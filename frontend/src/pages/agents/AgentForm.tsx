@@ -192,11 +192,15 @@ export function AgentForm() {
           <RuntimeFields
             value={watch('runtime') ?? { engine: 'pi' }}
             onChange={(value) => {
-                      setValue('runtime', value, { shouldDirty: true })
-                      if (value.engine === 'pi' && (provider === 'codex' || provider === 'claude')) {
-                        setValue('llm.provider', '', { shouldDirty: true })
-                      }
-                    }}
+              setValue('runtime', value, { shouldDirty: true })
+              if (value.engine === 'pi') {
+                if (value.subscription) {
+                  setValue('llm.provider', 'openai-codex', { shouldDirty: true })
+                } else if (provider === 'codex' || provider === 'claude' || provider === 'openai-codex') {
+                  setValue('llm.provider', '', { shouldDirty: true })
+                }
+              }
+            }}
             error={errors.runtime?.subscription?.claimName?.message}
           />
           <p className="label" style={{ marginTop: 12, color: 'var(--ink-3)' }}>
@@ -255,12 +259,22 @@ export function AgentForm() {
               <Select
                 id="llm.provider"
                 value={provider ?? ''}
-                onChange={(v) => setValue('llm.provider', v, { shouldDirty: true })}
+                onChange={(v) => {
+                  setValue('llm.provider', v, { shouldDirty: true })
+                  if (v === 'openai-codex') {
+                    setValue('runtime', { engine: 'pi', subscription: watch('runtime.subscription') ?? { claimName: '', login: false } }, { shouldDirty: true })
+                  } else if (watch('runtime.subscription')) {
+                    setValue('runtime', { engine: 'pi' }, { shouldDirty: true })
+                  }
+                }}
                 options={LLM_PROVIDERS}
               />
               <input type="hidden" {...register('llm.provider')} />
             </Field>
-            {provider ? (
+            {provider === 'openai-codex' ? <p className="label">
+              Configure the credential PVC and login mode in Runtime. Pi signs in with your ChatGPT subscription.
+            </p> : null}
+            {provider && provider !== 'openai-codex' ? (
               <>
                 {provider === 'custom' ? (
                   <Field
