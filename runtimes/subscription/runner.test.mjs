@@ -212,7 +212,8 @@ test('verified PR checkout supplies exact source and base without git credential
     const transport = async (command, args, options) => {
       calls.push({ args, options });
       assert.equal(command, 'git');
-      assert.deepEqual(Object.keys(options.env).sort(), ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_LFS_SKIP_SMUDGE', 'GIT_TERMINAL_PROMPT', 'PATH']);
+      assert.deepEqual(Object.keys(options.env).sort(), ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_LFS_SKIP_SMUDGE', 'GIT_TERMINAL_PROMPT', 'HOME', 'PATH']);
+      assert.equal(options.env.HOME, options.cwd);
       assert.ok(args.includes('http.followRedirects=false'));
       assert.ok(args.includes('core.hooksPath=/dev/null'));
       // Substitute only transport in this test; execute real fetch, revision checks and checkout.

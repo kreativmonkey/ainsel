@@ -127,7 +127,7 @@ export async function preparePullRequestWorkspace(task, {
         '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never',
         '-c', 'protocol.https.allow=always', ...args,
       ], { cwd, signal, timeout: 120000, maxBuffer: 1024 * 1024,
-        env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1',
+        env: { PATH: process.env.PATH, HOME: cwd, GIT_CONFIG_NOSYSTEM: '1',
           GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
           GIT_LFS_SKIP_SMUDGE: '1' } });
     } catch {
