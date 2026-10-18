@@ -136,9 +136,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("agent %s: spec.persona.id is required", agent.Name)
 	}
 
+	if err := r.validateSubscription(ctx, &agent); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// 4.5. ConfigMap with Pi models.json for ollama-cloud agents (must exist before Deployment)
-	if err := r.reconcilePiModelsConfigMap(ctx, &agent, agentName); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling Pi models ConfigMap: %w", err)
+	if !nativeRuntime(&agent) {
+		if err := r.reconcilePiModelsConfigMap(ctx, &agent, agentName); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconciling Pi models ConfigMap: %w", err)
+		}
 	}
 
 	// 4.75. Secret for AgentImage env vars (owned by the Agent for GC)
@@ -838,6 +844,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Watches(

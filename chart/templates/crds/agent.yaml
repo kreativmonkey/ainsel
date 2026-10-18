@@ -396,6 +396,14 @@ spec:
                   Fields like ImagePullPolicy and Resources are set by the operator or Helm
                   bootstrap — they are not exposed via the hub REST API.
                 properties:
+                  engine:
+                    description: Engine selects the task runtime. Empty preserves
+                      the Pi runtime.
+                    enum:
+                    - pi
+                    - codex
+                    - claude
+                    type: string
                   imagePullPolicy:
                     description: PullPolicy describes a policy for if/when to pull
                       a container image
@@ -468,6 +476,22 @@ spec:
                       Defaults to true when nil. Set to false to relax hardening for agent
                       images that require it (e.g. sidecar images that must run as root).
                     type: boolean
+                  subscription:
+                    description: Subscription provides the private persistent home
+                      for a native CLI.
+                    properties:
+                      claimName:
+                        description: ClaimName references an existing PVC in the Agent
+                          namespace.
+                        minLength: 1
+                        type: string
+                      login:
+                        description: Login drains task Jobs and opens an interactive
+                          login pod instead.
+                        type: boolean
+                    required:
+                    - claimName
+                    type: object
                 type: object
               scaling:
                 description: |-

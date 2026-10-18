@@ -157,7 +157,7 @@ func buildTaskJob(agent *ainselv1alpha1.Agent, agentName string, deploy *appsv1.
 	// operator still counts the Job as in flight. So the pod shares its PID
 	// namespace and hands the runtime's PID to every container: a sidecar that
 	// follows the contract ends with the task and the pod finishes as a unit.
-	tpl.Spec.ShareProcessNamespace = ptr.To(true)
+	tpl.Spec.ShareProcessNamespace = ptr.To(!nativeRuntime(agent))
 	tpl.Spec.Volumes = append(tpl.Spec.Volumes, corev1.Volume{
 		Name:         taskRunVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -269,6 +269,18 @@ func (r *AgentReconciler) syncPerTaskJobs(ctx context.Context, agent *ainselv1al
 	decision := ScaleDecision{
 		Replicas: active,
 		Reason:   ScaleReasonJobPerTask,
+	}
+
+	if nativeRuntime(agent) {
+		waiting, err := r.syncSubscriptionLogin(ctx, agent, agentName, deploy, active)
+		if err != nil {
+			return decision, err
+		}
+		if waiting {
+			decision.Message = "subscription login: task dispatch withheld"
+			decision.RequeueAfter = taskJobDispatchPoll
+			return decision, nil
+		}
 	}
 
 	if limit == 0 {
