@@ -121,7 +121,7 @@ var _ = Describe("WebhookConnector Controller", func() {
 		ing := &networkingv1.Ingress{}
 		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
 		Expect(ing.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
-			Hosts: []string{"example.com"}, SecretName: "webhook-tls",
+			Hosts: []string{"example.com"}, SecretName: "webhook-tls", // #nosec G101 -- K8s secret reference name, not a credential
 		}}))
 		Expect(ing.Spec.Rules).To(HaveLen(1))
 		Expect(ing.Spec.Rules[0].Host).To(Equal("example.com"))
