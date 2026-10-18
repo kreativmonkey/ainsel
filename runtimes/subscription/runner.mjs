@@ -44,36 +44,52 @@ export async function pullRequestContext(task, { fetcher = fetch, repository, si
       || repo.split('/').some(part => part === '.' || part === '..')
       || !Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid GitHub pull request identity');
   if (repository && repo.toLowerCase() !== repository.toLowerCase()) throw new Error('Pull request repository is not allowed');
+  const expected = data.pull_request;
+  if (![expected?.base?.sha, expected?.head?.sha].every(sha => typeof sha === 'string' && /^[a-f0-9]{40}$/i.test(sha))) {
+    throw new Error('Invalid GitHub pull request commit SHAs');
+  }
   const timeout = AbortSignal.timeout(15000);
-  const response = await fetcher(`https://api.github.com/repos/${repo}/pulls/${number}`, {
-    headers: { Accept: 'application/vnd.github.patch' }, redirect: 'error',
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
-  if (!response.ok) throw new Error(`GitHub patch fetch failed: HTTP ${response.status}`);
-  const limit = 512 * 1024;
-  if (Number(response.headers.get('content-length')) > limit) {
-    await response.body?.cancel();
-    throw new Error('GitHub patch exceeds 512 KiB');
-  }
-  if (!response.body) throw new Error('GitHub patch response has no body');
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) throw new Error('GitHub patch exceeds 512 KiB');
-      chunks.push(Buffer.from(value));
+  const fetchText = async (accept) => {
+    const response = await fetcher(`https://api.github.com/repos/${repo}/pulls/${number}`, {
+      headers: { Accept: accept }, redirect: 'error',
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+    if (!response.ok) throw new Error(`GitHub response fetch failed: HTTP ${response.status}`);
+    const limit = 512 * 1024;
+    if (Number(response.headers.get('content-length')) > limit) {
+      await response.body?.cancel();
+      throw new Error('GitHub response exceeds 512 KiB');
     }
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
-  }
-  const patch = Buffer.concat(chunks).toString('utf8');
+    if (!response.body) throw new Error('GitHub response has no body');
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) throw new Error('GitHub response exceeds 512 KiB');
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  };
+  const checkRevision = async () => {
+    const current = JSON.parse(await fetchText('application/vnd.github+json'));
+    if (current.base?.sha !== expected.base.sha || current.head?.sha !== expected.head.sha) {
+      throw new Error('GitHub pull request revision changed since webhook');
+    }
+    return current;
+  };
+  await checkRevision();
+  const patch = await fetchText('application/vnd.github.patch');
   if (!patch.trim()) throw new Error('GitHub patch response is empty');
-  const pr = data.pull_request ?? {};
+  // Recheck after streaming the patch so a concurrent push cannot silently mix revisions.
+  const pr = await checkRevision();
   const metadata = JSON.stringify({ repository: repo, number, title: pr.title,
     base: pr.base?.ref, base_sha: pr.base?.sha, head: pr.head?.ref, head_sha: pr.head?.sha,
     body: pr.body }, null, 2).slice(0, 32000);
