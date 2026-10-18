@@ -1,6 +1,7 @@
 import { readFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as codex from './executors/codex.mjs';
 import * as claude from './executors/claude.mjs';
@@ -120,14 +121,18 @@ export async function preparePullRequestWorkspace(task, {
   const { repo, number, expected } = identity;
   await mkdir(cwd, { recursive: true });
   if ((await readdir(cwd)).length) throw new Error('PR review workspace must be empty');
+  // Kubernetes emptyDir roots belong to root even when fsGroup grants writes.
+  // A child created by our UID keeps Git's ownership checks valid for the CLI too.
+  const sourceDirectory = join(cwd, 'repository');
+  await mkdir(sourceDirectory);
   const git = async (...args) => {
     try {
       return await execute('git', [
         '-c', 'credential.helper=', '-c', 'http.followRedirects=false',
         '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never',
         '-c', 'protocol.https.allow=always', ...args,
-      ], { cwd, signal, timeout: 120000, maxBuffer: 1024 * 1024,
-        env: { PATH: process.env.PATH, HOME: cwd, GIT_CONFIG_NOSYSTEM: '1',
+      ], { cwd: sourceDirectory, signal, timeout: 120000, maxBuffer: 1024 * 1024,
+        env: { PATH: process.env.PATH, HOME: sourceDirectory, GIT_CONFIG_NOSYSTEM: '1',
           GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
           GIT_LFS_SKIP_SMUDGE: '1' } });
     } catch {
@@ -145,6 +150,7 @@ export async function preparePullRequestWorkspace(task, {
   if (base !== expected.base.sha.toLowerCase()) throw new Error('GitHub PR base commit mismatch');
   await git('checkout', '--detach', head);
   if ((await git('rev-parse', 'HEAD')).stdout.trim() !== head) throw new Error('GitHub PR checkout mismatch');
+  return sourceDirectory;
 }
 
 export function runtimeEnvironment(env) {
@@ -200,8 +206,8 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   try {
     const persona = env.AGENT_PERSONA_PATH ? await readPersona(env.AGENT_PERSONA_PATH, 'utf8') : '';
     const context = await pullRequestContext(task, { fetcher, repository: env.AINSEL_REVIEW_REPO, signal });
-    await prepareWorkspace(task, { repository: env.AINSEL_REVIEW_REPO, signal });
-    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd: '/workspace',
+    const cwd = await prepareWorkspace(task, { repository: env.AINSEL_REVIEW_REPO, signal }) ?? '/workspace';
+    result = await executor.runTask({ prompt: buildPrompt(task, persona) + context, cwd,
       ...(model !== undefined ? { model } : {}),
       env: runtimeEnvironment(env), signal });
     if (!result?.text) throw new Error('Runtime produced no assistant response');

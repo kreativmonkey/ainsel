@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -223,10 +223,14 @@ test('verified PR checkout supplies exact source and base without git credential
       }
       return execute(command, args, options);
     };
-    await preparePullRequestWorkspace(actualTask, { cwd, execute: transport });
-    assert.equal(await readFile(join(cwd, 'review.txt'), 'utf8'), 'exact head');
-    assert.equal((await execute('git', ['-C', cwd, 'cat-file', '-t', base])).stdout.trim(), 'commit');
-    assert.equal((await execute('git', ['-C', cwd, 'remote', 'get-url', 'origin'])).stdout.trim(), 'https://github.com/owner/repo.git');
+    const sourceDirectory = await preparePullRequestWorkspace(actualTask, { cwd, execute: transport });
+    assert.equal(sourceDirectory, join(cwd, 'repository'));
+    assert.equal((await stat(sourceDirectory)).uid, process.getuid());
+    // The executor must also be able to use Git without ownership exceptions.
+    assert.equal((await execute('git', ['-C', sourceDirectory, 'rev-parse', 'HEAD'])).stdout.trim(), head);
+    assert.equal(await readFile(join(sourceDirectory, 'review.txt'), 'utf8'), 'exact head');
+    assert.equal((await execute('git', ['-C', sourceDirectory, 'cat-file', '-t', base])).stdout.trim(), 'commit');
+    assert.equal((await execute('git', ['-C', sourceDirectory, 'remote', 'get-url', 'origin'])).stdout.trim(), 'https://github.com/owner/repo.git');
     assert.equal(calls.some(({ args }) => args.some(arg => arg.includes('evil.invalid'))), false);
     await assert.rejects(preparePullRequestWorkspace(actualTask, { cwd, execute: transport }), /must be empty/);
     const mismatch = { ...actualTask, payload: { ...actualTask.payload, pull_request: { ...actualTask.payload.pull_request, head: { sha: 'c'.repeat(40) } } } };
@@ -243,12 +247,13 @@ test('checkout failure NACKs before CLI and preserves patch prompt on success', 
   assert.equal(await runOneShot({ env, ...h }), 'failed');
   assert.match(JSON.parse(h.calls[1].opts.body).error, /head changed/);
   let prepared = false;
-  const success = harness(undefined, async ({ prompt }) => {
+  const success = harness(undefined, async ({ prompt, cwd }) => {
+    assert.equal(cwd, '/workspace/repository');
     assert.equal(prepared, true);
     assert.match(prompt, /<untrusted-pr-patch>/);
     return { text: 'Review done' };
   });
-  success.prepareWorkspace = async () => { prepared = true; };
+  success.prepareWorkspace = async () => { prepared = true; return '/workspace/repository'; };
   assert.equal(await runOneShot({ env, ...success }), 'completed');
 });
 

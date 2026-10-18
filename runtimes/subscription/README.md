@@ -51,8 +51,11 @@ it does not change AInsel's Apache-2.0 license or grant extra provider rights.
 For public GitHub pull request events, the runner validates the webhook's
 repository, PR number, and immutable base/head SHAs against GitHub's API and
 includes the bounded patch in the prompt. Before starting either native CLI,
-it populates the empty `/workspace` with the exact verified PR head and fetches
-the base commit for local comparisons. A moved head, failed fetch, or nonempty
+it populates `/workspace/repository` with the exact verified PR head and fetches
+the base commit for local comparisons. Both Git and the CLI run in that child
+directory, which belongs to the runtime UID even when Kubernetes owns the
+`/workspace` volume root. Git's repository ownership protection stays enabled.
+A moved head, failed fetch, or nonempty
 workspace fails the task before the CLI starts. Fetches use only the canonical
 GitHub HTTPS origin, without inherited Git configuration or credentials;
 redirects, hooks, and submodule downloads are disabled. Private repositories
