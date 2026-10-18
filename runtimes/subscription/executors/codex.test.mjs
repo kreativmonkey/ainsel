@@ -38,7 +38,7 @@ test('device login emits only official verification URL and one-time code', asyn
       console.error('https://auth.openai.com/codex/device?access_token=private');
       console.error('  https://auth.openai.com/codex/device');
       console.error('\\x1b[1mABCD-12345\\x1b[0m');
-      console.log('https://auth.openai.com/codex/device');
+      console.log('Open https://auth.openai.com/codex/device in your browser');
       console.log('Login complete: refresh_token=private');
     `, (args) => assert.deepEqual(args, ['login', '--device-auth'])),
   });

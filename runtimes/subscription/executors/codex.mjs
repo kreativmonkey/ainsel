@@ -75,13 +75,15 @@ export async function startLogin(options = {}) {
   const code = await launch(['login', '--device-auth'], options, (_stream, rawLine) => {
     const line = rawLine.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').trim();
     let event;
-    if (/^https:\/\/auth\.openai\.com\/codex\/device\/?$/.test(line)) {
-      event = { type: 'verification_url', url: line };
-    } else if (/^[A-Z0-9]{4}-[A-Z0-9]{4,8}$/.test(line)) {
-      event = { type: 'user_code', code: line };
+    const url = line.match(/https:\/\/auth\.openai\.com\/codex\/device\/?(?=$|[\s),.;])/);
+    const code = line.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4,8}\b/);
+    if (url) {
+      event = { type: 'verification_url', url: url[0] };
+    } else if (code) {
+      event = { type: 'user_code', code: code[0] };
     }
-    if (event && !seen.has(line)) {
-      seen.add(line);
+    if (event && !seen.has(event.url ?? event.code)) {
+      seen.add(event.url ?? event.code);
       options.onOutput?.(event);
     }
   });
