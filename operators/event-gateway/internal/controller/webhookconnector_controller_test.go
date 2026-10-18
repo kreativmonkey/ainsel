@@ -120,6 +120,9 @@ var _ = Describe("WebhookConnector Controller", func() {
 		By("verifying Ingress routes the webhook path")
 		ing := &networkingv1.Ingress{}
 		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
+		Expect(ing.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts: []string{"example.com"}, SecretName: "webhook-tls",
+		}}))
 		Expect(ing.Spec.Rules).To(HaveLen(1))
 		Expect(ing.Spec.Rules[0].Host).To(Equal("example.com"))
 		paths := ing.Spec.Rules[0].HTTP.Paths
@@ -139,6 +142,29 @@ var _ = Describe("WebhookConnector Controller", func() {
 			}
 			return false
 		}, 10*time.Second, 100*time.Millisecond).Should(BeTrue())
+	})
+
+	It("updates existing Ingress TLS when the operator secret changes", func() {
+		conn := newConnector(false)
+		Expect(k8sClient.Create(ctx, conn)).To(Succeed())
+		reconcileOnce()
+
+		r := &WebhookConnectorReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			ConnectorTLSSecretName: "wildcard-cluster-f4mily-net-tls",
+		}
+		Expect(r.reconcileWebhookIngress(ctx, conn)).To(Succeed())
+		ing := &networkingv1.Ingress{}
+		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
+		Expect(ing.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts: []string{"example.com"}, SecretName: "wildcard-cluster-f4mily-net-tls",
+		}}))
+
+		By("restoring the default when the configuration is removed")
+		r.ConnectorTLSSecretName = ""
+		Expect(r.reconcileWebhookIngress(ctx, conn)).To(Succeed())
+		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
+		Expect(ing.Spec.TLS[0].SecretName).To(Equal("webhook-tls"))
 	})
 
 	It("scales Deployment to zero and sets Ready=False when disabled", func() {
