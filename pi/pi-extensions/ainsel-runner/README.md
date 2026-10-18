@@ -102,6 +102,17 @@ caching produces no `cache_read` / `cache_write` series at all. Treat a missing 
 as zero, and use `cache_read / (input + cache_read + cache_write)` as the cache hit
 rate when checking whether prompt caching is actually working.
 
+Usage is booked from every LLM call pi reports, not only from assistant messages:
+`message_end` (any message that carries `usage`, which pi also types on tool results),
+`session_compact`, and `session_tree`. The last two are one-shot completions — pi
+summarises a compaction or a discarded branch with a direct call that never appears as
+a message — and a compaction prompt is the whole conversation, so it is the largest
+single prompt a run makes. Those completions also write a `task_conversations` row with
+`role: "system"` and `stopReason` `compaction` or `branch_summary`, because the hub
+reads its own rows in preference to these counters (see docs/observability.md); a
+counter-only fix would leave them invisible in the console. They carry no model of their
+own, so they are labelled with `OLLAMA_CLOUD_MODEL` — the model the run summarises with.
+
 ## Why an extension, not a separate Node process
 
 Pi already provides:

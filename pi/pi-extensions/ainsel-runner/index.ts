@@ -278,6 +278,106 @@ export function costOf(usage: any): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+/** Whether a pi usage object carries anything worth booking: at least one
+ *  positive token component or a positive cost.
+ *
+ *  This is the predicate the runner records on — "does this carry usage", not
+ *  "is it an assistant message". pi types usage on non-assistant messages too
+ *  (`ToolResultEventBase.usage`), and compaction/branch-summary entries carry
+ *  usage for a one-shot completion that never appears as a message at all, so
+ *  a role check drops real consumption (issue #76). Pure and exported for
+ *  unit testing. */
+export function hasRecordableUsage(usage: any): boolean {
+	return tokenComponents(usage).length > 0 || costOf(usage) > 0;
+}
+
+/** Book one pi LLM call against the Prometheus counters.
+ *
+ *  Every LLM call the runner can see goes through here — the agent loop's
+ *  assistant messages, tool results that report usage, and the one-shot
+ *  completions behind compaction and branch summaries, which pi never emits
+ *  as messages. `source` only labels the log line so an operator can tell
+ *  which path a line came from; the counter labels are the same for all of
+ *  them, which is the point: the totals have to add up.
+ *
+ *  Returns whether anything was booked, so callers can mirror the decision
+ *  into the transcript and keep the counter and the row in step. */
+export function recordUsage(usage: any, model: string, source = "message"): boolean {
+	if (!hasRecordableUsage(usage)) return false;
+	const agent = process.env.AINSEL_EVENT_AGENT ?? "";
+	const repo = process.env.AINSEL_EVENT_REPO ?? "";
+	const org = process.env.AINSEL_EVENT_ORG ?? "";
+	const eventType = process.env.AINSEL_EVENT_TYPE ?? "";
+	const modelLabel = model ?? "";
+	for (const [tokenType, value] of tokenComponents(usage)) {
+		tokenCounter.inc(
+			{ agent, repo, org, event_type: eventType, token_type: tokenType, model: modelLabel },
+			value,
+		);
+	}
+	const cost = costOf(usage);
+	if (cost > 0) {
+		costCounter.inc({ agent, repo, org, event_type: eventType, model: modelLabel }, cost);
+	}
+	logInfo("token usage recorded", {
+		source,
+		agent,
+		event_type: eventType,
+		input: usage?.input,
+		output: usage?.output,
+		cache_read: usage?.cacheRead,
+		cache_write: usage?.cacheWrite,
+		cost_usd: cost,
+		model: modelLabel,
+	});
+	return true;
+}
+
+/** Current value of a Prometheus counter series, or 0 when it has never been
+ *  raised. Reads the same registry the /metrics endpoint serves, so a test (or
+ *  an operator debugging a pod) can assert what the counter side of a usage
+ *  report actually booked rather than only what the code path intended.
+ *  prom-client's metric snapshot is async, so this is too. */
+export async function counterValue(name: string, labels: Record<string, string>): Promise<number> {
+	const metric: any = prom.register.getSingleMetric(name);
+	const snapshot = await metric?.get?.();
+	for (const series of snapshot?.values ?? []) {
+		const seriesLabels: Record<string, string> = series.labels ?? {};
+		const match = Object.entries(labels).every(
+			([key, value]) => String(seriesLabels[key] ?? "") === String(value),
+		);
+		if (match) return series.value ?? 0;
+	}
+	return 0;
+}
+
+/** The model to label a usage report with when the source carries none.
+ *
+ *  Compaction and branch-summary entries store `usage` but no model — pi
+ *  summarises with the model the run is configured for, so the operator's
+ *  OLLAMA_CLOUD_MODEL is the same one that produced the tokens. */
+function sessionModel(): string {
+	return process.env.OLLAMA_CLOUD_MODEL ?? "";
+}
+
+/** Build the transcript row for a compaction or branch-summary completion.
+ *
+ *  Those LLM calls never reach `message_end`, so without this row the hub has
+ *  no record of them at all — and the hub prefers its Postgres conversation
+ *  rows over the Prometheus counters whenever it has them, so a counter-only
+ *  fix would stay invisible in the UI. Returns null when the entry carries no
+ *  usage, so a summary pi did not price stays out of both destinations. */
+export function summaryConversationMessage(entry: any, stopReason: string, model: string): any | null {
+	if (!hasRecordableUsage(entry?.usage)) return null;
+	return {
+		role: "system",
+		model: model ?? "",
+		usage: entry.usage,
+		stopReason,
+		content: [{ type: "text", text: entry.summary ?? "" }],
+	};
+}
+
 // EventContext is the normalized view of an event.
 export interface EventContext {
 	type?: string;
@@ -512,6 +612,35 @@ export function toConversationPayloads(messages: any[], meta: SerializeMeta): Co
 					...base,
 					role: "assistant",
 					content: redactSecrets(JSON.stringify(blocks)),
+					model: m.model ?? "",
+					inputTokens: m.usage?.input ?? 0,
+					outputTokens: m.usage?.output ?? 0,
+					cacheReadTokens: m.usage?.cacheRead ?? 0,
+					cacheWriteTokens: m.usage?.cacheWrite ?? 0,
+					costUsd: m.usage?.cost?.total ?? 0,
+					stopReason: m.stopReason ?? "",
+				});
+			} else if (m.role === "system") {
+				// Synthetic rows for LLM calls pi never emits as messages: the
+				// compaction and branch-summary completions (see
+				// summaryConversationMessage). Their usage is the whole point of
+				// the row, so a system message without any — pi's own prompt-
+				// section patches arrive this way — stays out of the transcript.
+				if (!hasRecordableUsage(m.usage)) continue;
+				const blocks = toBlockArray(m.content).map((c: any) =>
+					c.type === "text" ? { type: "text", text: c.text } : { type: c.type },
+				);
+				let serialized = redactSecrets(JSON.stringify(blocks));
+				// Same safety net as toolResult rows: a summary is bounded in
+				// practice, but a pathological one must not produce an unbounded row.
+				const systemCap = Math.max(128_000, 8 * resolveToolResultMaxChars());
+				if (serialized.length > systemCap) {
+					serialized = truncateWithMarker(serialized, systemCap);
+				}
+				out.push({
+					...base,
+					role: "system",
+					content: serialized,
 					model: m.model ?? "",
 					inputTokens: m.usage?.input ?? 0,
 					outputTokens: m.usage?.output ?? 0,
@@ -1377,8 +1506,83 @@ async function runOneShot(
 	process.exit(ok ? 0 : 1);
 }
 
+/** Register the handlers that book LLM usage and mirror it into the
+ *  conversation transcript.
+ *
+ *  Three sources, because pi reports an LLM call in three places:
+ *
+ *    - `message_end` — the agent loop's messages. Booked on the presence of
+ *      usage, not on the role: pi types usage on non-assistant messages too
+ *      (`ToolResultEventBase.usage`), and the old `role !== "assistant"` guard
+ *      dropped whatever those reported (issue #76).
+ *    - `session_compact` — the summary of the whole conversation, produced by a
+ *      direct one-shot completion that never appears as a message. It is the
+ *      largest single prompt a run makes, and until now it counted as neither
+ *      input, output, nor cache.
+ *    - `session_tree` — the same one-shot completion behind a branch summary.
+ *
+ *  The last two also capture a synthetic `role: "system"` message so the hub
+ *  gets a `task_conversations` row: the hub prefers its Postgres rows over
+ *  these counters whenever it has them, so a counter-only fix would stay
+ *  invisible in the console. A summary that fires between tasks has no
+ *  conversation to attach a row to and captureMessage drops it, but its tokens
+ *  are still booked. Exported for unit testing with a real tracker. */
+export function registerUsageEvents(pi: ExtensionAPI, tracker: TurnTracker): void {
+	pi.on("message_end", (event) => {
+		const msg = event.message;
+		captureMessage(tracker, msg);
+		if (msg.role === "assistant") {
+			const errMsg = msg.stopReason === "error"
+				? (msg.errorMessage ?? "LLM returned stopReason=error with no message")
+				: null;
+			if (errMsg) {
+				logError("assistant message ended with error", {
+					stopReason: msg.stopReason,
+					errorMessage: errMsg,
+				});
+			}
+			recordAssistantEnd(tracker, errMsg);
+		}
+		// Booked on the presence of usage rather than on the role. Read
+		// structurally because pi's AgentMessage union declares usage/model only
+		// on the members that report them.
+		const carrier = msg as { usage?: unknown; model?: string };
+		recordUsage(carrier.usage, carrier.model ?? "");
+	});
+
+	// Compaction summarises the conversation with a direct one-shot completion
+	// (completeSimple in pi's compaction module), so it never produces a
+	// message_end — the tokens of the largest prompt in the session simply went
+	// unrecorded. The usage pi writes to the session is the source of truth
+	// here; the synthetic system row is what makes it visible in the hub UI,
+	// which reads Postgres in preference to these counters.
+	pi.on("session_compact", (event) => {
+		const entry = event.compactionEntry as any;
+		// A compaction entry stores usage but no model: pi summarises with the
+		// model the run is configured for.
+		const model = sessionModel();
+		if (!recordUsage(entry?.usage, model, "compaction")) return;
+		const row = summaryConversationMessage(entry, "compaction", model);
+		if (row) captureMessage(tracker, row);
+	});
+
+	// Branch/tree summaries are the same gap: pi summarises a discarded branch
+	// with a one-shot completion and reports it only as SessionTreeEvent. The
+	// event also fires for a navigation that summarised nothing, which has no
+	// usage and records nothing.
+	pi.on("session_tree", (event) => {
+		const entry = event.summaryEntry as any;
+		if (!entry) return;
+		const model = sessionModel();
+		if (!recordUsage(entry.usage, model, "branch_summary")) return;
+		const row = summaryConversationMessage(entry, "branch_summary", model);
+		if (row) captureMessage(tracker, row);
+	});
+}
+
 export default function ainselRunnerExtension(pi: ExtensionAPI) {
 	const tracker = createTurnTracker();
+	registerUsageEvents(pi, tracker);
 
 	// turn_end fires after EACH LLM response in the tool-use loop — too early
 	// to resolve the task, but the turn's assistant message and tool results
@@ -1395,51 +1599,6 @@ export default function ainselRunnerExtension(pi: ExtensionAPI) {
 	pi.on("agent_settled", () => {
 		endTurn(tracker);
 		markSettled(tracker);
-	});
-
-	pi.on("message_end", (event) => {
-		const msg = event.message;
-		captureMessage(tracker, msg);
-		if (msg.role !== "assistant") return;
-
-		const errMsg = msg.stopReason === "error"
-			? (msg.errorMessage ?? "LLM returned stopReason=error with no message")
-			: null;
-		if (errMsg) {
-			logError("assistant message ended with error", {
-				stopReason: msg.stopReason,
-				errorMessage: errMsg,
-			});
-		}
-		recordAssistantEnd(tracker, errMsg);
-		if (msg.usage && msg.usage.totalTokens > 0) {
-			const agent = process.env.AINSEL_EVENT_AGENT ?? "";
-			const repo = process.env.AINSEL_EVENT_REPO ?? "";
-			const org = process.env.AINSEL_EVENT_ORG ?? "";
-			const eventType = process.env.AINSEL_EVENT_TYPE ?? "";
-			const model = msg.model ?? "";
-			const usage = msg.usage;
-			for (const [tokenType, value] of tokenComponents(usage)) {
-				tokenCounter.inc(
-					{ agent, repo, org, event_type: eventType, token_type: tokenType, model },
-					value,
-				);
-			}
-			const cost = costOf(usage);
-			if (cost > 0) {
-				costCounter.inc({ agent, repo, org, event_type: eventType, model }, cost);
-			}
-			logInfo("token usage recorded", {
-				agent,
-				event_type: eventType,
-				input: usage.input,
-				output: usage.output,
-				cache_read: usage.cacheRead,
-				cache_write: usage.cacheWrite,
-				cost_usd: cost,
-				model,
-			});
-		}
 	});
 
 	// Strip accumulated conversation history between events.

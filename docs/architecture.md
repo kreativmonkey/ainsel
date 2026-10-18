@@ -60,11 +60,6 @@ graph TD
 
     UI[frontend] -->|"REST API + WebSocket"| HUB
     HUB -->|CRUD| K8s
-
-    MEM0[(mem0 memory service<br/>external)]
-
-    AR1 -.->|store/recall| MEM0
-    AR2 -.->|store/recall| MEM0
 ```
 
 ## Event Flow

@@ -141,9 +141,11 @@ No breaking changes.
 
 ### Upgrading to v0.2
 
-**The chart no longer bundles Qdrant.** Agent memory is served by the
-separate [mem0 service](https://github.com/AInsel/mem0), which runs its own
-Qdrant (see [`docs/adding-memory.md`](adding-memory.md)). On `helm upgrade`:
+**The chart no longer bundles Qdrant.** Agent memory is now a bring-your-own
+external service: you run your own [mem0](https://github.com/mem0ai/mem0)
+instance (mem0 Cloud or self-hosted, with its own vector store) and point
+agents at it via `MEM0_API_URL` — the chart does not deploy it (see
+[`docs/adding-memory.md`](adding-memory.md)). On `helm upgrade`:
 
 1. The bundled `qdrant` StatefulSet, its Service, and the `qdrant`
    NetworkPolicy are removed. Any `qdrant:` keys left in your values file
