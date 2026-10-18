@@ -77,7 +77,7 @@ set -- --mode rpc --no-session
 # Review agents expose only the runner's scoped immutable repository reader.
 # Keep untrusted repository resources from becoming executable extensions or skills.
 if [ -n "${AINSEL_REVIEW_REPO:-}" ]; then
-  set -- "$@" --no-tools --no-extensions --no-skills --no-prompt-templates
+  set -- "$@" --no-builtin-tools --no-extensions --no-skills --no-prompt-templates
 fi
 [ -r "$PERSONA_PATH" ] && set -- "$@" --append-system-prompt "$PERSONA_PATH"
 [ -r "$AGENT_MD_PATH" ] && set -- "$@" --append-system-prompt "$AGENT_MD_PATH"

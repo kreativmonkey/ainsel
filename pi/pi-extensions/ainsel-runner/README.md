@@ -204,3 +204,17 @@ builds. Repository content remains untrusted and can influence findings; this
 mode restricts the model's capabilities rather than promising prompt injection
 immunity. The runtime itself retains credentials for its provider and hub and
 must remain trusted. This tool boundary is not an OS sandbox for arbitrary code.
+
+Review mode uses `--no-builtin-tools` so Pi retains the extension tool in its
+registry. Pi 1.3.0 interprets `--no-tools` as an empty tool allowlist: later
+`setActiveTools` calls cannot restore filtered extension tools. A review task
+NACKs if the model completes without any successful repository-tool operation,
+including when the tool was unavailable or every operation failed.
+
+To run the real Pi RPC regression alongside the unit tests, point
+`AINSEL_PI_CLI` at the deployed Pi 1.3.0 JavaScript CLI and run `npm test` in this
+extension directory. The test uses an isolated temporary agent directory and a
+local OpenAI-compatible fixture, checks the tool schema actually sent to the
+model, and verifies a tool response contains the committed source rather than
+modified working-tree contents. No provider credentials or external model API
+are needed. Without this variable the RPC test reports an explicit skip.

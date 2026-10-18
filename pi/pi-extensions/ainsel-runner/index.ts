@@ -38,8 +38,9 @@ import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
 import * as prom from "prom-client";
-import { pullRequestContext, preparePullRequestWorkspace, createRepositoryReader, registerReviewTool, REVIEW_TOOL } from "./review.mjs";
+import { pullRequestContext, preparePullRequestWorkspace, createRepositoryReader, registerReviewTool, reviewCompletionError, REVIEW_TOOL } from "./review.mjs";
 
+let reviewCompletedOperations = 0;
 let reviewReader: Awaited<ReturnType<typeof createRepositoryReader>> | undefined;
 
 // ---------------------------------------------------------------------------
@@ -1220,6 +1221,7 @@ async function processTask(
 	const evCtx = extractEventContext(event);
 	const invocationId = task.invocation_id ?? "";
 	const start = Date.now();
+	reviewCompletedOperations = 0;
 
 	logInfo("event received", {
 		event_type: evCtx.type,
@@ -1328,6 +1330,12 @@ async function processTask(
 				error_message: errMsg,
 				agent: agentName,
 			});
+		}
+
+		const reviewError = reviewCompletionError(!!process.env.AINSEL_REVIEW_REPO, reviewCompletedOperations);
+		if (succeeded && reviewError) {
+			succeeded = false;
+			errMsg = reviewError;
 		}
 
 		if (succeeded && !tracker.assistantMessageCompleted) {
@@ -1595,7 +1603,7 @@ export function registerUsageEvents(pi: ExtensionAPI, tracker: TurnTracker): voi
 }
 
 export default function ainselRunnerExtension(pi: ExtensionAPI) {
-	if (process.env.AINSEL_REVIEW_REPO) registerReviewTool(pi, () => reviewReader);
+	if (process.env.AINSEL_REVIEW_REPO) registerReviewTool(pi, () => reviewReader, () => { reviewCompletedOperations++; });
 	const tracker = createTurnTracker();
 	registerUsageEvents(pi, tracker);
 
