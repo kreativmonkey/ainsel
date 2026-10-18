@@ -9,7 +9,8 @@ CI check:     .github/workflows/ci-licenses.yml regenerates and fails on any dif
 
 This file lists every third-party dependency statically bundled into ainsel's
 distributed artifacts (frontend SPA bundle, Go service/operator images, pi
-runtime image). Each row links to the license text as shipped in `LICENSES/`.
+and subscription runtime images). Each row links to the license text as
+shipped in `LICENSES/`.
 Project-level attributions and license elections (including the DOMPurify
 Apache-2.0 election) are recorded in [NOTICE](NOTICE).
 
@@ -429,6 +430,29 @@ Apache-2.0 election) are recorded in [NOTICE](NOTICE).
 | `yaml` | 2.9.0 | ISC | [LICENSE](LICENSES/yaml@2.9.0/LICENSE) |
 | `zod` | 4.6.7 | MIT | [LICENSE](LICENSES/zod@4.6.7/LICENSE) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [LICENSE](LICENSES/zod-to-json-schema@3.25.2/LICENSE) |
+
+## Native subscription runtime (runtimes/subscription)
+
+16 packages.
+
+| Package | Version | License | License texts |
+| --- | --- | --- | --- |
+| `@anthropic-ai/claude-code` | 2.1.302 | SEE LICENSE IN README.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-darwin-arm64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-darwin-arm64@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-darwin-x64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-darwin-x64@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-linux-arm64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-linux-arm64@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-linux-arm64-musl` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-linux-arm64-musl@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-linux-x64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-linux-x64@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-linux-x64-musl` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-linux-x64-musl@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-win32-arm64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-win32-arm64@2.1.302/LICENSE.md) |
+| `@anthropic-ai/claude-code-win32-x64` | 2.1.302 | SEE LICENSE IN LICENSE.md | [LICENSE.md](LICENSES/@anthropic-ai+claude-code-win32-x64@2.1.302/LICENSE.md) |
+| `@openai/codex` | 0.163.0 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-darwin-arm64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-darwin-x64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-linux-arm64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-linux-x64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-win32-arm64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
+| `@openai/codex` | 0.163.0-win32-x64 | Apache-2.0 | [Apache-2.0.txt](LICENSES/Apache-2.0.txt) |
 
 ## Go modules (services, operators, shared)
 

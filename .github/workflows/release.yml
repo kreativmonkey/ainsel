@@ -215,6 +215,11 @@ jobs:
             file: services/webhook-receiver/Dockerfile
             context: .
             versioned: true
+          - component: subscription
+            image: dpinsel/ainsel-subscription
+            file: runtimes/subscription/Dockerfile
+            context: .
+            versioned: false
           - component: pi
             image: dpinsel/ainsel-pi
             file: pi/Dockerfile
@@ -434,7 +439,7 @@ jobs:
 
           images="dpinsel/ainsel-hub-frontend dpinsel/ainsel-hub-backend
             dpinsel/ainsel-k8s-ai-agent-operator dpinsel/ainsel-k8s-event-source-gateway-operator
-            dpinsel/ainsel-mcp dpinsel/ainsel-chat-mcp dpinsel/ainsel-webhook-receiver dpinsel/ainsel-pi"
+            dpinsel/ainsel-mcp dpinsel/ainsel-chat-mcp dpinsel/ainsel-webhook-receiver dpinsel/ainsel-pi dpinsel/ainsel-subscription"
           for img in ${images}; do
             for tag in ${tags}; do
               if docker manifest inspect "${img}:${tag}" >/dev/null 2>&1; then

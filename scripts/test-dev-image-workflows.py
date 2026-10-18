@@ -29,6 +29,7 @@ import yaml
 SHA = "0ae751bc1234567890"
 WORKFLOWS = Path(".github/workflows")
 EXPECTED_IMAGES = {
+    "dev-image-subscription.yml": "ainsel-subscription",
     "dev-image-frontend.yml": "ainsel-hub-frontend",
     "dev-image-operators-agent.yml": "ainsel-k8s-ai-agent-operator",
     "dev-image-operators-event-gateway.yml": "ainsel-k8s-event-source-gateway-operator",
