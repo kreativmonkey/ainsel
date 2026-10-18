@@ -282,7 +282,7 @@ func (r *AgentReconciler) syncPerTaskJobs(ctx context.Context, agent *ainselv1al
 		Reason:   ScaleReasonJobPerTask,
 	}
 
-	if nativeRuntime(agent) {
+	if subscriptionRuntime(agent) {
 		waiting, err := r.syncSubscriptionLogin(ctx, agent, agentName, deploy, active)
 		if err != nil {
 			return decision, err

@@ -32,12 +32,12 @@ for its container image and tool catalog.
 | `description` | string | No | Agent description |
 | `imageRef.name` | string | Yes | Name of the `AgentImage` CR in the same namespace that provides the container image and tool catalog |
 | `runtime.engine` | string | No | Task runtime: `pi` (default), `codex`, or `claude`. Native engines require an image containing the official CLI and `/opt/ainsel/subscription/runner.mjs` |
-| `runtime.subscription.claimName` | string | Native engines | Existing dedicated `ReadWriteOncePod` PVC for the CLI home; mounted only into the agent container at `/home/agent`. Retained independently of the Agent |
+| `runtime.subscription.claimName` | string | Subscription providers | Existing dedicated `ReadWriteOncePod` PVC. Pi `openai-codex` mounts `/home/agent/.pi/agent`; native engines mount `/home/agent`. Retained independently of the Agent |
 | `runtime.subscription.login` | bool | No | Default false. Drain existing task Jobs, withhold new dispatch and create `login-<agent>-0` pod for direct end-user CLI sign-in. False removes the login pod before resuming tasks |
 | `runtime.imagePullPolicy` | string | No | Kubernetes image pull policy (`Always`, `Never`, `IfNotPresent`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits for the agent pod |
 | `llm.model` | string | Yes | LLM model identifier (e.g. `unsloth/gpt-oss-120b-GGUF:F16`) |
-| `llm.provider` | string | No | LLM provider backend. One of `ollama-cloud`, `opencode`, `custom` |
+| `llm.provider` | string | No | LLM provider backend. One of `ollama-cloud`, `opencode`, `alibaba-cloud`, `custom`, `openai-codex` |
 | `llm.maxTurns` | int | No | Maximum tool-use loop turns |
 | `llm.temperature` | float64 | No | LLM sampling temperature |
 | `llm.vision` | bool | No | Whether pi sends image input. When true the operator advertises `"input": ["text", "image"]` to pi, so screenshots and image attachments are attached; while false pi sends none, even to a model that can see them. The endpoint is never probed: images sent to a model that cannot see them fail the request. Takes effect when the agent's pod next starts (the init container copies `models.json` in at start). Default false |
@@ -46,7 +46,7 @@ for its container image and tool catalog.
 | `skills.items[]` | []string | No | Agent-scoped skill selection (skill ids). Present = explicit override (`items: []` = no skills at all); absent = inherit the referenced image's `enabledSkills` |
 | `mcp.servers[]` | []AgentMCPServer | No | Agent-scoped MCP servers (`name`, `url`, `tokenFromEnv`), resolved from the hub's MCP registry when the agent is written. Present = explicit override (`servers: []` = connect to none); absent = inherit the image's `mcpServers`. The operator injects `MCP_SERVERS` / `MCP_SERVER_TOKENS` from this list |
 | `env[]` | []AgentEnvVar | No | Per-agent environment variables (`name`, `value`, `secret`) layered on top of the referenced image's `env`: a matching name overrides the image's value and secret flag, a new name is added. The operator writes the effective set to the `<agent>-image-env` Secret and injects each entry into the agent container |
-| `scaling.replicas` | int32 | No | Concurrency cap: the maximum number of per-task Jobs the operator keeps in flight for this agent (default 1). Native subscription engines cap positive values at 1. Each queued task gets its own Job up to this cap; `0` pauses the agent (nothing is dispatched) |
+| `scaling.replicas` | int32 | No | Concurrency cap: the maximum number of per-task Jobs the operator keeps in flight for this agent (default 1). Subscription providers cap positive values at 1. Each queued task gets its own Job up to this cap; `0` pauses the agent (nothing is dispatched) |
 | `scaling.disabled` | bool | No | Set by the operator for a stopped agent: hold at zero even if the hub still counts queued work. Cleared on start |
 | `pause.pausedUntil` | Time | No | Pause window end. **Present = paused**: while active (or while `pausedUntil` is omitted = indefinite) the hub's claim endpoint hands this agent no tasks, so routed tasks accumulate as a backlog that drains in id order when the pause ends — nothing is lost. Expiry is evaluated at read time, so an expiring pause needs no controller. Orthogonal to `scaling`, which governs how many tasks run at once, not whether they are delivered. Managed via `POST`/`DELETE /api/v1/agents/{name}/pause` or by editing the CR. Caveat: while an **indefinite** pause is active nothing prunes the backlog — `agent_tasks` and invocation rows keep growing until the pause is lifted |
 | `memory.enabled` | bool | Yes | Enable shared memory |
@@ -459,3 +459,36 @@ review context. Set `AINSEL_REVIEW_REPO` (for example,
 `kreativmonkey/ainsel`) on the Agent to restrict which repository it will
 review. Findings appear in the AInsel task transcript; this runtime does not
 post GitHub review comments.
+
+### Pi with a ChatGPT subscription
+
+Use the Pi image with `spec.runtime.engine: pi`, `spec.llm.provider:
+openai-codex` and `spec.runtime.subscription.claimName` referencing a dedicated
+Filesystem `ReadWriteOncePod` PVC. The operator persists `/home/agent/.pi/agent`
+(including Pi's `auth.json`) while retaining Pi initialization, skills and the
+normal Pi task runner. The built-in Codex OAuth provider and model catalog are
+used directly; AInsel does not generate an OpenAI Completions override.
+
+Set `spec.runtime.subscription.login: true` to drain tasks and create the login
+pod. For agent `reviewer`, connect with:
+
+```sh
+kubectl -n ainsel exec -it login-reviewer-0 -- pi
+```
+
+Inside Pi, run `/login`, select OpenAI Codex and choose device code login.
+Complete the browser confirmation, exit Pi, then set
+`spec.runtime.subscription.login: false`. The login pod must terminate before
+new tasks start. Positive concurrency limits are capped at one to protect
+refresh-token updates on the shared authentication directory. No separate
+worker node or Codex CLI sandbox is needed for this provider flow.
+
+The operator and hub never inspect the credential file. Keep the PVC private
+to this agent. Login pods receive no hub credentials, provider API keys or MCP
+sidecars. Pi login and task pods use the same runtime image and auth directory.
+
+In the console, select Pi, enable **ChatGPT subscription**, choose the credential
+PVC and enable login mode, then save. The console selects `openai-codex` as the
+provider. Select an explicit model from Pi's built-in Codex catalog (the
+operator passes both provider and model to Pi). Existing native engines remain
+available independently.

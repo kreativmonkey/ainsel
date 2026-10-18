@@ -117,7 +117,7 @@ type AgentRuntime struct {
 	// +optional
 	// +kubebuilder:validation:Enum=pi;codex;claude
 	Engine string `json:"engine,omitempty"`
-	// Subscription provides the private persistent home for a native CLI.
+	// Subscription provides persistent authentication for Pi openai-codex or a native CLI.
 	// +optional
 	Subscription *AgentSubscription `json:"subscription,omitempty"`
 
@@ -132,10 +132,11 @@ type AgentRuntime struct {
 	SecurityHardened *bool `json:"securityHardened,omitempty"`
 }
 
-// AgentSubscription configures direct end-user CLI authentication. The operator
+// AgentSubscription configures direct end-user provider authentication. The operator
 // never reads authentication files. Provision a dedicated ReadWriteOncePod PVC.
 type AgentSubscription struct {
-	// ClaimName references an existing PVC in the Agent namespace.
+	// ClaimName references an existing PVC in the Agent namespace. Pi mounts it at
+	// /home/agent/.pi/agent; native CLIs mount it at /home/agent.
 	// +kubebuilder:validation:MinLength=1
 	ClaimName string `json:"claimName"`
 	// Login drains task Jobs and opens an interactive login pod instead.

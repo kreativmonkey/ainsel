@@ -234,7 +234,7 @@ func newPodPlan(agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alph
 // to zero replicas — all work runs as Jobs.
 func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alpha1.AgentImage, podImage string) (*appsv1.Deployment, []mcpservers.MissingEnvEntry, error) {
 	plan := newPodPlan(agent, agentName, img)
-	if nativeRuntime(agent) {
+	if subscriptionRuntime(agent) {
 		configureSubscriptionPlan(agent, plan)
 	}
 
@@ -488,6 +488,9 @@ func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName s
 			filtered = append(filtered, e)
 		}
 		envs = append(filtered, subscriptionEnv(agent)...)
+	}
+	if piSubscription(agent) {
+		envs = append(envs, subscriptionEnv(agent)...)
 	}
 	return envs
 }

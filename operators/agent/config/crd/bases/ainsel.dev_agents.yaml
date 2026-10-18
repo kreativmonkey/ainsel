@@ -476,12 +476,13 @@ spec:
                       images that require it (e.g. sidecar images that must run as root).
                     type: boolean
                   subscription:
-                    description: Subscription provides the private persistent home
-                      for a native CLI.
+                    description: Subscription provides persistent authentication for
+                      Pi openai-codex or a native CLI.
                     properties:
                       claimName:
-                        description: ClaimName references an existing PVC in the Agent
-                          namespace.
+                        description: |-
+                          ClaimName references an existing PVC in the Agent namespace. Pi mounts it at
+                          /home/agent/.pi/agent; native CLIs mount it at /home/agent.
                         minLength: 1
                         type: string
                       login:

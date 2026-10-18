@@ -24,26 +24,37 @@ func subscriptionCommand(command ...string) []string {
 	return append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" && exec "$@"`, "--"}, command...)
 }
 
+func subscriptionRuntime(agent *api.Agent) bool {
+	return nativeRuntime(agent) || piSubscription(agent)
+}
+
+func piSubscription(agent *api.Agent) bool {
+	return (agent.Spec.Runtime.Engine == "" || agent.Spec.Runtime.Engine == "pi") && agent.Spec.LLM.Provider == "openai-codex"
+}
+
 func nativeRuntime(agent *api.Agent) bool {
 	return agent.Spec.Runtime.Engine == "codex" || agent.Spec.Runtime.Engine == "claude"
 }
 
 func (r *AgentReconciler) validateSubscription(ctx context.Context, agent *api.Agent) error {
 	sub := agent.Spec.Runtime.Subscription
-	if !nativeRuntime(agent) {
+	if !subscriptionRuntime(agent) {
 		if agent.Spec.Runtime.Engine != "" && agent.Spec.Runtime.Engine != "pi" {
 			return fmt.Errorf("unsupported runtime engine %q", agent.Spec.Runtime.Engine)
 		}
 		if sub != nil {
-			return fmt.Errorf("subscription requires runtime.engine codex or claude")
+			return fmt.Errorf("subscription requires an authenticated runtime (Pi openai-codex, codex or claude)")
 		}
 		return nil
 	}
+	if piSubscription(agent) && strings.TrimSpace(agent.Spec.LLM.Model) == "" {
+		return fmt.Errorf("pi openai-codex requires an explicit built-in model")
+	}
 	if sub == nil || sub.ClaimName == "" {
-		return fmt.Errorf("native runtime requires runtime.subscription.claimName")
+		return fmt.Errorf("subscription runtime requires runtime.subscription.claimName")
 	}
 	if agent.Spec.Runtime.SecurityHardened != nil && !*agent.Spec.Runtime.SecurityHardened {
-		return fmt.Errorf("native runtime requires securityHardened")
+		return fmt.Errorf("subscription runtime requires securityHardened")
 	}
 	var pvc corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: sub.ClaimName}, &pvc); err != nil {
@@ -59,6 +70,9 @@ func (r *AgentReconciler) validateSubscription(ctx context.Context, agent *api.A
 }
 
 func subscriptionEnv(agent *api.Agent) []corev1.EnvVar {
+	if piSubscription(agent) {
+		return []corev1.EnvVar{{Name: "HOME", Value: "/home/agent"}, {Name: "PI_CODING_AGENT_DIR", Value: "/home/agent/.pi/agent"}}
+	}
 	return []corev1.EnvVar{
 		{Name: "AINSEL_RUNTIME", Value: agent.Spec.Runtime.Engine},
 		{Name: "HOME", Value: "/home/agent"},
@@ -68,6 +82,15 @@ func subscriptionEnv(agent *api.Agent) []corev1.EnvVar {
 }
 
 func configureSubscriptionPlan(agent *api.Agent, plan *podPlan) {
+	if piSubscription(agent) {
+		// Persist only Pi configuration; retain models and skills initialization.
+		for i := range plan.podVolumes {
+			if plan.podVolumes[i].Name == "pi-home" {
+				plan.podVolumes[i].VolumeSource = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: agent.Spec.Runtime.Subscription.ClaimName}}
+			}
+		}
+		return
+	}
 	// Native CLIs own their entire private home; Pi configuration is ephemeral
 	// and has no place in it. Do not copy or inspect native auth files.
 	volumes := plan.podVolumes[:0]
@@ -125,11 +148,18 @@ func (r *AgentReconciler) syncSubscriptionLogin(ctx context.Context, agent *api.
 	c.Name = "login"
 	c.WorkingDir = "/home/agent"
 	c.Command = subscriptionCommand("sleep", "infinity")
+	if piSubscription(agent) {
+		c.Command = []string{"sleep", "infinity"}
+	}
 	c.Args = nil
 	// Login only receives the CLI home configuration. It has no hub token,
 	// provider keys, persona files, sidecars or service account credentials.
 	c.Env = subscriptionEnv(agent)
-	c.VolumeMounts = []corev1.VolumeMount{{Name: "subscription-home", MountPath: "/home/agent"}, {Name: "tmp", MountPath: "/tmp"}}
+	mountPath := "/home/agent"
+	if piSubscription(agent) {
+		mountPath = "/home/agent/.pi/agent"
+	}
+	c.VolumeMounts = []corev1.VolumeMount{{Name: "subscription-home", MountPath: mountPath}, {Name: "tmp", MountPath: "/tmp"}}
 	pod = corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace, Labels: map[string]string{AgentNameLabel: agent.Name, "ainsel.dev/subscription-login": "true"}}, Spec: corev1.PodSpec{
 		Containers: []corev1.Container{c}, SecurityContext: tpl.Spec.SecurityContext,
 		AutomountServiceAccountToken: ptr.To(false), RestartPolicy: corev1.RestartPolicyNever,
