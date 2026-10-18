@@ -97,7 +97,7 @@ export async function runTask(options) {
   if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Codex cwd must be an absolute path');
   if (!sandboxes.has(sandbox)) throw new TypeError('Invalid Codex sandbox');
   if (model !== undefined && (typeof model !== 'string' || !model.trim())) throw new TypeError('Invalid Codex model');
-  const args = ['exec', '--json', '--ephemeral', '--sandbox', sandbox, '--cd', cwd];
+  const args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', sandbox, '--cd', cwd];
   if (model) args.push('--model', model);
   args.push('-');
 

@@ -79,7 +79,7 @@ test('task uses explicit cwd, stdin prompt, native ephemeral mode, and read-only
     `, (args, options) => {
       assert.equal(options.cwd, taskOptions.cwd);
       assert.deepEqual(args, [
-        'exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--cd', taskOptions.cwd,
+        'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--cd', taskOptions.cwd,
         '--model', 'selected-model', '-',
       ]);
       assert.equal(args.includes(prompt), false);
