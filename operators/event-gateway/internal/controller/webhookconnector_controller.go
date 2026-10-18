@@ -53,6 +53,7 @@ type WebhookConnectorReconciler struct {
 	HubURL                   string
 	HubInternalSecret        string
 	ConnectorImagePullPolicy corev1.PullPolicy
+	ConnectorIngressMode     string
 }
 
 //+kubebuilder:rbac:groups=ainsel.dev,resources=webhookconnectors,verbs=get;list;watch;create;update;patch;delete
@@ -326,6 +327,14 @@ func (r *WebhookConnectorReconciler) reconcileWebhookIngress(ctx context.Context
 					SecretName: "webhook-tls", // #nosec G101 -- K8s secret reference name, not a credential
 				},
 			},
+		}
+		if r.ConnectorIngressMode == "nginx-inc-minion" {
+			ing.Annotations = map[string]string{
+				"nginx.org/mergeable-ingress-type": "minion",
+				"nginx.org/rewrite-target":         "/publish",
+			}
+			// The externally managed Master owns TLS and host-level redirects.
+			ing.Spec.TLS = nil
 		}
 		return nil
 	})

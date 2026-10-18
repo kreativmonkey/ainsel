@@ -141,6 +141,42 @@ var _ = Describe("WebhookConnector Controller", func() {
 		}, 10*time.Second, 100*time.Millisecond).Should(BeTrue())
 	})
 
+	It("converts an existing Ingress to an F5 Minion and back", func() {
+		conn := newConnector(false)
+		Expect(k8sClient.Create(ctx, conn)).To(Succeed())
+		reconcileOnce()
+
+		r := &WebhookConnectorReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			ConnectorIngressMode: "nginx-inc-minion",
+		}
+		Expect(r.reconcileWebhookIngress(ctx, conn)).To(Succeed())
+		ing := &networkingv1.Ingress{}
+		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
+		Expect(ing.Annotations).To(Equal(map[string]string{
+			"nginx.org/mergeable-ingress-type": "minion",
+			"nginx.org/rewrite-target":         "/publish",
+		}))
+		Expect(ing.Spec.TLS).To(BeEmpty())
+		Expect(*ing.Spec.IngressClassName).To(Equal("nginx"))
+		Expect(ing.Spec.Rules[0].Host).To(Equal("example.com"))
+		path := ing.Spec.Rules[0].HTTP.Paths[0]
+		Expect(path.Path).To(Equal("/ainsel-dev/webhooks/test-webhook"))
+		Expect(*path.PathType).To(Equal(networkingv1.PathTypeExact))
+		Expect(path.Backend.Service.Name).To(Equal(resourceName))
+
+		By("restoring standalone TLS and annotations when the mode is removed")
+		r.ConnectorIngressMode = ""
+		Expect(r.reconcileWebhookIngress(ctx, conn)).To(Succeed())
+		Expect(k8sClient.Get(ctx, ingKey, ing)).To(Succeed())
+		Expect(ing.Annotations).To(Equal(map[string]string{
+			"nginx.ingress.kubernetes.io/rewrite-target": "/publish",
+			"nginx.ingress.kubernetes.io/ssl-redirect":   "true",
+		}))
+		Expect(ing.Spec.TLS).To(HaveLen(1))
+		Expect(ing.Spec.TLS[0].SecretName).To(Equal("webhook-tls"))
+	})
+
 	It("scales Deployment to zero and sets Ready=False when disabled", func() {
 		Expect(k8sClient.Create(ctx, newConnector(true))).To(Succeed())
 		reconcileOnce()

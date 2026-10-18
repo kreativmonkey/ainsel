@@ -133,6 +133,9 @@ connectorOperator:
   # mutable tags (e.g. :dev) so newly built images are picked up on rollout;
   # IfNotPresent is fine for immutable release tags.
   connectorImagePullPolicy: IfNotPresent
+  # ingress-nginx preserves standalone Ingress behavior. nginx-inc-minion
+  # joins an externally managed F5 NGINX Master for the webhook hostname.
+  ingressMode: ingress-nginx
   resources:
     requests:
       cpu: 50m
