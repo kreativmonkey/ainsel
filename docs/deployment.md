@@ -388,3 +388,25 @@ worked examples (code review, issue triage, comment Q&A,
 issue → PR implementation).
 
 For troubleshooting common deployment issues, see [docs/troubleshooting.md](troubleshooting.md).
+
+### F5 NGINX connector routing
+
+For F5 NGINX Ingress Controller, set `connectorOperator.ingressMode` to
+`nginx-inc-minion` and deploy an operator image containing this setting. The
+chart passes `CONNECTOR_INGRESS_MODE`; empty or unset keeps the existing
+`ingress-nginx` behavior. Unsupported values stop operator startup.
+
+Minion mode creates connector Ingresses with F5's mergeable Minion annotation
+and `nginx.org/rewrite-target: /publish`, preserving the exact webhook path and
+backend. TLS and HTTPS redirects belong to an externally managed Master; the
+operator omits them from Minions. Existing Ingresses update on operator startup.
+
+Before enabling it, configure one F5 Master per webhook hostname with the same
+`nginx` Ingress class, the TLS certificate, and no paths. Move existing UI/API
+paths into a separate Minion; adding a Master annotation to an Ingress that
+still has paths is invalid. All Minions for a host must have distinct paths.
+The operator does not create the Master. Plan this conversion together with
+the GitOps rollout to preserve UI/API access.
+
+See the [F5 Mergeable Ingress example](https://github.com/nginx/kubernetes-ingress/tree/main/examples/ingress-resources/mergeable-ingress-types)
+and [F5 rewrite annotations](https://docs.nginx.com/nginx-ingress-controller/configuration/ingress-resources/advanced-configuration-with-annotations/).

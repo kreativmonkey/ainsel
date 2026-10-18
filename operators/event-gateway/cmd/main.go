@@ -74,6 +74,15 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	connectorIngressMode := os.Getenv("CONNECTOR_INGRESS_MODE")
+	switch connectorIngressMode {
+	case "", "ingress-nginx", "nginx-inc-minion":
+	default:
+		setupLog.Error(fmt.Errorf("unsupported CONNECTOR_INGRESS_MODE: %q", connectorIngressMode),
+			"Expected ingress-nginx or nginx-inc-minion")
+		os.Exit(1)
+	}
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
@@ -185,6 +194,7 @@ func main() {
 		HubURL:                   requireEnv("HUB_URL"),
 		HubInternalSecret:        os.Getenv("HUB_INTERNAL_VALIDATE_SECRET"),
 		ConnectorImagePullPolicy: connectorImagePullPolicy(),
+		ConnectorIngressMode:     connectorIngressMode,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "WebhookConnector")
 		os.Exit(1)
