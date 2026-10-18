@@ -44,6 +44,15 @@ export function runtimeEnvironment(env) {
   return clean;
 }
 
+export function redactKnownSecrets(text, env) {
+  let safe = text;
+  for (const [name, value] of Object.entries(env)) {
+    if (!/token|secret|password|api_?key|credential/i.test(name) || typeof value !== 'string' || value.length < 8) continue;
+    safe = safe.replaceAll(value, '[REDACTED]');
+  }
+  return safe;
+}
+
 export async function runOneShot({ env = process.env, fetcher = fetch, implementations = executors, readPersona = readFile, signal } = {}) {
   const id = Number(required(env, 'AINSEL_TASK_ID'));
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('AINSEL_TASK_ID must be a positive integer');
@@ -87,7 +96,7 @@ export async function runOneShot({ env = process.env, fetcher = fetch, implement
   }
   // Conversation persistence is best effort; task acknowledgement is authoritative.
   try {
-    await post('/api/internal/task-messages', { ...meta, role: 'assistant', content: result.text,
+    await post('/api/internal/task-messages', { ...meta, role: 'assistant', content: redactKnownSecrets(result.text, env),
       model: env.OLLAMA_CLOUD_MODEL ?? '', inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0 });
   } catch { /* observability must not re-run an already completed CLI task */ }

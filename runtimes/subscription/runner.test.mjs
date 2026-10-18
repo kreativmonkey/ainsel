@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPrompt, runOneShot, runtimeEnvironment } from './runner.mjs';
+import { buildPrompt, runOneShot, runtimeEnvironment, redactKnownSecrets } from './runner.mjs';
 
 const env = {
   AINSEL_TASK_ID: '42', AGENT_NAME: 'reviewer', HUB_URL: 'http://hub',
@@ -69,4 +69,5 @@ test('native CLI does not inherit hub credentials or API billing overrides', () 
   assert.equal(clean.HUB_INTERNAL_VALIDATE_SECRET, undefined);
   assert.equal(clean.ANTHROPIC_API_KEY, undefined);
   assert.equal(clean.GITHUB_TOKEN, 'forge-token');
+  assert.equal(redactKnownSecrets('used forge-token', { GITHUB_TOKEN: 'forge-token' }), 'used [REDACTED]');
 });
