@@ -6,7 +6,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
-    "test": "node --experimental-strip-types --test index.test.ts review.test.mjs"
+    "test": "node --experimental-strip-types --test index.test.ts review.test.mjs review-rpc.test.mjs"
   },
   "dependencies": {
     "prom-client": "^15.1.3"

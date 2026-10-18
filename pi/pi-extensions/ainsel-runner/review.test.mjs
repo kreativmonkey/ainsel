@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createRepositoryReader, pullRequestContext, preparePullRequestWorkspace, registerReviewTool, REVIEW_TOOL } from './review.mjs';
+import { createRepositoryReader, pullRequestContext, preparePullRequestWorkspace, registerReviewTool, reviewCompletionError, REVIEW_TOOL } from './review.mjs';
 
 const execute = promisify(execFile);
 test('immutable repository reader supports full source and rejects credential/symlink escape', async () => {
@@ -117,4 +117,16 @@ test('verified PR checkout supplies exact source and base without git credential
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('review completion requires a successful repository operation', async () => {
+  let tool; let completed = 0;
+  registerReviewTool({ registerTool: t => tool = t, on() {} }, () => undefined, () => completed++);
+  assert.equal((await tool.execute('id', { operation: 'read' })).isError, true);
+  assert.equal(completed, 0);
+  assert.match(reviewCompletionError(true, completed), /no successful repository/);
+  registerReviewTool({ registerTool: t => tool = t, on() {} }, () => async () => 'source', () => completed++);
+  await tool.execute('id', { operation: 'read' });
+  assert.equal(reviewCompletionError(true, completed), null);
+  assert.equal(reviewCompletionError(false, 0), null);
 });
