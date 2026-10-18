@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"github.com/ainsel-project/ainsel/shared/api/tasktoken"
+	appsv1 "k8s.io/api/apps/v1"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +39,7 @@ func TestSubscriptionRequiresExclusivePVC(t *testing.T) {
 }
 
 func TestSubscriptionTemplateIsolation(t *testing.T) {
+	t.Setenv("HUB_INTERNAL_VALIDATE_SECRET", "cluster-secret")
 	a := subscriptionAgent()
 	img := &api.AgentImage{Spec: api.AgentImageSpec{Env: []api.AgentImageEnvVar{
 		{Name: "ANTHROPIC_API_KEY", Value: "must-not-be-injected"},
@@ -58,11 +62,25 @@ func TestSubscriptionTemplateIsolation(t *testing.T) {
 		if e.Name == "HOME" && e.Value != "/home/agent" {
 			t.Fatal("profile overrode private home")
 		}
-		if e.Name == "OLLAMA_API_KEY" || e.Name == "ANTHROPIC_API_KEY" {
+		if e.Name == "HUB_INTERNAL_VALIDATE_SECRET" || e.Name == "OLLAMA_API_KEY" || e.Name == "ANTHROPIC_API_KEY" {
 			t.Fatal("native worker received API key")
 		}
 	}
-	job := buildTaskJob(a, "agent-worker", jobModeDeployment(), 1)
+	job := buildTaskJob(a, "agent-worker", &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: tpl}}, 1)
+	token := findEnvVar(job.Spec.Template.Spec.Containers[0].Env, "HUB_INTERNAL_VALIDATE_SECRET")
+	if token == nil || token.Value == "cluster-secret" {
+		t.Fatal("native Job lacks scoped token")
+	}
+	claims, err := tasktoken.Verify("cluster-secret", token.Value, time.Now())
+	if err != nil || claims.Agent != a.Name || claims.Task != 1 {
+		t.Fatalf("Job token scope: %+v, %v", claims, err)
+	}
+	for _, e := range tpl.Spec.Containers[0].Env {
+		if e.Name == "HUB_INTERNAL_VALIDATE_SECRET" {
+			t.Fatal("Job mutated template token")
+		}
+	}
+
 	if *job.Spec.Template.Spec.ShareProcessNamespace {
 		t.Fatal("private CLI home exposed through shared PID namespace")
 	}

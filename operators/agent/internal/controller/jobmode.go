@@ -20,6 +20,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	ainselv1alpha1 "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
+	"github.com/ainsel-project/ainsel/shared/api/tasktoken"
 )
 
 // Per-task Jobs: every queued task runs as one Kubernetes Job — a pod starts,
@@ -137,6 +138,16 @@ func buildTaskJob(agent *ainselv1alpha1.Agent, agentName string, deploy *appsv1.
 	// The runtime container learns which task it owns; the chat sidecar and the
 	// setup init do not care.
 	env := corev1.EnvVar{Name: "AINSEL_TASK_ID", Value: strconv.FormatInt(taskID, 10)}
+	if nativeRuntime(agent) {
+		// Bound credential exposure to 24 hours, including retries. Login pods
+		// and the reusable Deployment template carry no hub token.
+		token := tasktoken.Sign(resolveHubInternalToken(), agent.Name, taskID, time.Now().Add(24*time.Hour))
+		for i := range tpl.Spec.Containers {
+			if tpl.Spec.Containers[i].Name == "agent" {
+				tpl.Spec.Containers[i].Env = append(tpl.Spec.Containers[i].Env, corev1.EnvVar{Name: "HUB_INTERNAL_VALIDATE_SECRET", Value: token})
+			}
+		}
+	}
 	injected := false
 	for i := range tpl.Spec.Containers {
 		if tpl.Spec.Containers[i].Name == "agent" {

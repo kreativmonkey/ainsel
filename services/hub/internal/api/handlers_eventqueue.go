@@ -626,15 +626,12 @@ func (s *Server) handleIngestTaskLog(w http.ResponseWriter, r *http.Request) {
 
 // handleIngestTaskMessage accepts POST /api/internal/task-messages from agent runtimes.
 func (s *Server) handleIngestTaskMessage(w http.ResponseWriter, r *http.Request) {
-	if !s.requireInternalToken(w, r) {
+	claims, scoped := s.scopedTaskClaims(r)
+	if !scoped && !s.requireInternalToken(w, r) {
 		return
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if s.taskLogs == nil {
-		writeError(w, http.StatusServiceUnavailable, "task log store not configured")
 		return
 	}
 
@@ -644,6 +641,15 @@ func (s *Server) handleIngestTaskMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if scoped && (msg.AgentName != claims.Agent || msg.CorrelationID != fmt.Sprintf("task-%d", claims.Task)) {
+		writeError(w, http.StatusUnauthorized, "task token scope mismatch")
+		return
+	}
+
+	if s.taskLogs == nil {
+		writeError(w, http.StatusServiceUnavailable, "task log store not configured")
+		return
+	}
 	if err := s.taskLogs.InsertConversation(r.Context(), &msg); err != nil {
 		slog.Error("task message insert failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to store task message")

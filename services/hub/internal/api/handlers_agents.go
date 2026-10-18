@@ -593,7 +593,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 // here, before any sub-route dispatch, so that adding a new task sub-route
 // cannot accidentally ship unauthenticated.
 func (s *Server) handleInternalAgent(w http.ResponseWriter, r *http.Request) {
-	if !s.requireInternalToken(w, r) {
+	if !s.requireTaskRouteToken(w, r) {
 		return
 	}
 	name := extractName(r.URL.Path, "/api/internal/agents/")
