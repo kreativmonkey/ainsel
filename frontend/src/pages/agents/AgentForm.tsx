@@ -1,3 +1,4 @@
+import { RuntimeFields } from './RuntimeFields'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -62,6 +63,7 @@ export function AgentForm() {
         name: existing.data.name,
         description: existing.data.description ?? '',
         imageRef: { name: existing.data.imageRef?.name ?? '' },
+        runtime: existing.data.runtime ?? { engine: 'pi' },
         llm: {
           model: existing.data.llm?.model ?? '',
           provider: existing.data.llm?.provider ?? '',
@@ -186,6 +188,11 @@ export function AgentForm() {
               <input type="hidden" {...register('imageRef.name')} />
             </Field>
           </div>
+          <RuntimeFields
+            value={watch('runtime') ?? { engine: 'pi' }}
+            onChange={(value) => setValue('runtime', value, { shouldDirty: true })}
+            error={errors.runtime?.subscription?.claimName?.message}
+          />
           <p className="label" style={{ marginTop: 12, color: 'var(--ink-3)' }}>
             Tools, skills, MCP servers and environment are edited per agent on
             the agent's Tools, Skills and Runtime tabs.

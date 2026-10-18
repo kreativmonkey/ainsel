@@ -42,6 +42,10 @@ export const agentSchema = z
   .object({
     name: z.string().min(1, 'Name is required'),
     description: z.string().optional(),
+    runtime: z.object({
+      engine: z.enum(['pi', 'codex', 'claude']),
+      subscription: z.object({ claimName: z.string(), login: z.boolean() }).optional(),
+    }).optional(),
     imageRef: z.object({ name: z.string().min(1, 'Image is required') }),
     llm: z.object({
       model: z.string().min(1, 'Model is required'),
@@ -71,6 +75,9 @@ export const agentSchema = z
     groupId: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.runtime?.engine !== undefined && data.runtime.engine !== 'pi' && !data.runtime.subscription?.claimName.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime', 'subscription', 'claimName'], message: 'Credential PVC is required' })
+    }
     if (data.llm.provider === 'custom' && !data.customProviderUrl?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -88,6 +95,7 @@ export type AgentFormValues = z.infer<typeof agentSchema>
 export const agentDefaults: AgentFormInput = {
   name: '',
   description: '',
+  runtime: { engine: 'pi' },
   imageRef: { name: '' },
   llm: {
     model: '',
@@ -136,6 +144,7 @@ export function buildAgentRequest(
     name: values.name,
     description: values.description || undefined,
     imageRef: values.imageRef,
+    runtime: values.runtime,
     llm: values.llm,
     ollamaCloud,
     openCode,

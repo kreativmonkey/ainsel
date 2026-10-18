@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useForm, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { RuntimeFields } from './RuntimeFields'
 import { useCreateAgent } from '../../api/agents'
 import { useAgentImage, useAgentImages } from '../../api/agentImages'
 import { usePersonas } from '../../api/personas'
@@ -31,7 +32,7 @@ import {
  */
 const STEPS = [
   { id: 'identity', idx: '§01', title: 'Identity', fields: ['name', 'description', 'groupId'] },
-  { id: 'runtime', idx: '§02', title: 'Runtime', fields: ['imageRef.name'] },
+  { id: 'runtime', idx: '§02', title: 'Runtime', fields: ['imageRef.name', 'runtime.engine', 'runtime.subscription.claimName'] },
   {
     id: 'model',
     idx: '§03',
@@ -319,6 +320,11 @@ export function AgentWizard() {
                     />
                     <input type="hidden" {...register('imageRef.name')} />
                   </Field>
+                  <RuntimeFields
+                    value={watch('runtime') ?? { engine: 'pi' }}
+                    onChange={(value) => setValue('runtime', value, { shouldDirty: true })}
+                    error={errors.runtime?.subscription?.claimName?.message}
+                  />
                 </div>
 
                 {selectedImage && image.data ? (

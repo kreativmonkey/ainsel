@@ -13,6 +13,10 @@ export type AgentLLM = {
    *  limit the actual LLM endpoint enforces, or compaction fires too late. */
   contextWindow?: number
 }
+export type AgentRuntime = {
+  engine: 'pi' | 'codex' | 'claude'
+  subscription?: { claimName: string; login: boolean }
+}
 export type AgentPersona = { id: string }
 export type AgentImageRef = { name: string; displayName?: string }
 /** Agent-scoped skill selection: present = explicit override (empty items
@@ -77,6 +81,7 @@ export function isIdle(status?: AgentSummary['status']): boolean {
 }
 
 export type AgentResponse = AgentSummary & {
+  runtime?: AgentRuntime
   llm?: AgentLLM
   persona?: AgentPersona
   enabledTools?: string[]

@@ -1,3 +1,5 @@
+import { RuntimeFields } from './RuntimeFields'
+import { Button } from '../../primitives/Button'
 import { useState } from 'react'
 import { useUpdateAgent, type AgentResponse } from '../../api/agents'
 import { useAgentImage, useAgentImages } from '../../api/agentImages'
@@ -68,6 +70,19 @@ function ImageRefPicker({ agent }: AgentImageSectionProps) {
   )
 }
 
+function RuntimeSettings({ agent }: AgentImageSectionProps) {
+  const [runtime, setRuntime] = useState(agent.runtime ?? { engine: 'pi' as const })
+  const update = useUpdateAgent()
+  return <Panel title="Subscription runtime" className="cropped">
+    <RuntimeFields value={runtime} onChange={setRuntime} />
+    <Button disabled={update.isPending || (runtime.engine !== 'pi' && !runtime.subscription?.claimName.trim())}
+      onClick={() => update.mutate({ id: agent.id, body: { name: agent.name, runtime } })}>
+      {update.isPending ? 'Saving…' : 'Save runtime'}
+    </Button>
+    {update.error ? <p role="alert">{update.error.message}</p> : null}
+  </Panel>
+}
+
 function NoImagePanel({ what, hint }: { what: string; hint: string }) {
   return (
     <Panel title={what} className="cropped">
@@ -86,6 +101,7 @@ export function AgentImageSection({ agent }: AgentImageSectionProps) {
   return (
     <div style={{ display: 'grid', gap: 24 }}>
       <ImageRefPicker agent={agent} />
+      <RuntimeSettings key={JSON.stringify(agent.runtime)} agent={agent} />
       {imageName ? (
         <ImageFormContainer key={imageName} id={imageName} embedded sections="image" />
       ) : (
