@@ -1,12 +1,16 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ainsel-project/ainsel/services/hub/internal/eventqueue"
+	"github.com/ainsel-project/ainsel/services/hub/internal/tasklogs"
 	"github.com/ainsel-project/ainsel/shared/api/tasktoken"
 )
 
@@ -85,5 +89,66 @@ func TestScopedTokenCannotIngestEvents(t *testing.T) {
 		if i > 0 && s.requireTaskRouteToken(httptest.NewRecorder(), r) {
 			t.Fatal("invalid token authorized task endpoint")
 		}
+	}
+}
+
+func TestScopedTaskMessageInvocation(t *testing.T) {
+	s := &Server{internalValidateSecret: "secret", eventQueue: testQueueStore(t)}
+	ctx := context.Background()
+	eventID := "test-invtask-scoped-" + time.Now().UTC().Format("150405.000000000")
+	if _, err := s.eventQueue.Pool().Exec(ctx, `INSERT INTO events (id, connector, headers, data, raw) VALUES ($1, 'test', '{}', '{}', '')`, eventID); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := s.eventQueue.Pool().QueryRow(ctx, `INSERT INTO agent_tasks (event_id, agent_name, trigger_name, invocation_id, headers, payload, status) VALUES ($1, 'reviewer', 'test', 'inv-owned', '{}', '{}', 'pending') RETURNING id`, eventID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	token := tasktoken.Sign("secret", "reviewer", id, time.Now().Add(time.Hour))
+	for _, tc := range []struct {
+		invocation string
+		want       int
+	}{
+		{"inv-owned", http.StatusServiceUnavailable}, // Authorized, then fails at the unwired log store.
+		{"inv-other", http.StatusUnauthorized},
+		{"", http.StatusUnauthorized},
+	} {
+		body := fmt.Sprintf(`{"agentName":"reviewer","correlationId":"task-%d","invocationId":%q}`, id, tc.invocation)
+		r := httptest.NewRequest("POST", "/api/internal/task-messages", strings.NewReader(body))
+		r.Header.Set("X-Internal-Token", token)
+		w := httptest.NewRecorder()
+		s.handleIngestTaskMessage(w, r)
+		if w.Code != tc.want {
+			t.Errorf("invocation %q: status %d, want %d: %s", tc.invocation, w.Code, tc.want, w.Body.String())
+		}
+	}
+	if _, err := s.eventQueue.Pool().Exec(ctx, `DELETE FROM agent_tasks WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/api/internal/task-messages", strings.NewReader(fmt.Sprintf(`{"agentName":"reviewer","correlationId":"task-%d","invocationId":"inv-owned"}`, id)))
+	r.Header.Set("X-Internal-Token", token)
+	w := httptest.NewRecorder()
+	s.handleIngestTaskMessage(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing task authorized: %d", w.Code)
+	}
+}
+
+func TestTaskMessageMatchesStoredInvocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, claimed string
+		task          *eventqueue.Task
+		want          bool
+	}{
+		{"owned invocation", "inv-owned", &eventqueue.Task{InvocationID: "inv-owned"}, true},
+		{"foreign invocation", "inv-other", &eventqueue.Task{InvocationID: "inv-owned"}, false},
+		{"omitted invocation", "", &eventqueue.Task{InvocationID: "inv-owned"}, false},
+		{"previous retry invocation", "inv-old", &eventqueue.Task{InvocationID: "inv-new"}, false},
+		{"deleted task", "inv-owned", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := taskMessageMatchesInvocation(&tasklogs.ConversationMessage{InvocationID: tc.claimed}, tc.task); got != tc.want {
+				t.Fatalf("matches=%v, want %v", got, tc.want)
+			}
+		})
 	}
 }
