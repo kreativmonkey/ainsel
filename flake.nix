@@ -25,7 +25,7 @@
             gnumake
             nginx
             shellcheck
-            python3
+            (python3.withPackages (ps: [ ps.pyyaml ]))
             just
           ];
           shellHook = ''echo "AInsel dev shell — run just"'';

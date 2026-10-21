@@ -168,7 +168,7 @@ describe('AgentWizard', () => {
     vi.unstubAllGlobals()
   })
 
-  it('hides Pi-only model settings for a native subscription runtime', async () => {
+  it('creates a native subscription agent with managed storage', async () => {
     const user = userEvent.setup()
     renderWizard()
     await user.type(await screen.findByLabelText('Name'), 'native-agent')
@@ -176,13 +176,21 @@ describe('AgentWizard', () => {
     await user.click(next())
     await selectImage(user)
     await user.selectOptions(screen.getByLabelText('Agent runtime'), 'codex')
-    await user.type(screen.getByLabelText('Credential PVC'), 'private-home')
+    expect(screen.getByLabelText('Credential storage')).toHaveValue('managed')
+    await user.click(screen.getByLabelText(/Login mode/))
     await user.click(next())
     expect(await screen.findByLabelText('Model')).toBeInTheDocument()
     expect(screen.queryByLabelText(/^provider$/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Context Window')).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: /image input/i })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Model'), 'gpt-5')
+    await user.click(next())
+    await selectPersona(user)
+    await user.click(next())
+    await user.click(await screen.findByRole('button', { name: /create agent/i }))
+    await waitFor(() => expect(postBody(fetchMock)).toBeDefined())
+    expect(postBody(fetchMock)?.runtime).toEqual({ engine: 'codex', subscription: { claimName: '', createClaim: true, login: true } })
   })
 
   it('starts on the identity step and shows every step in order', async () => {

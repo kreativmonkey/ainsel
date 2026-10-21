@@ -129,6 +129,17 @@ Create a new Agent. The hub generates the resource name (`a-<short id>`); the re
 
 `imageRef.name` is required and must reference an existing `AgentImage`. Any names in `enabledTools` not declared by that image are rejected. The `ollamaCloud.apiKey`, when present, is stored in a Secret named `<agent>-ollama-key` and never echoed back.
 
+To create dedicated subscription storage through the API, send
+`runtime.subscription: {"createClaim":true,"login":true}` (with the desired
+runtime engine). The hub generates `claimName: "<agent-id>-home"`; the operator
+creates a retained 5Gi Filesystem `ReadWriteOncePod` PVC using the default
+StorageClass. The console selects this mode for new subscriptions. To use a
+pre-provisioned claim, supply `claimName` and omit `createClaim` or set it to
+false. The API also generates the stable claim name when enabling managed
+storage on an existing agent. Managed claims remain after Agent deletion and
+are tied to its Kubernetes UID; a replacement agent cannot adopt them in
+managed mode. A default StorageClass with CSI RWOP support is required.
+
 For Pi with a ChatGPT subscription, use `runtime: {"engine":"pi","subscription":{"claimName":"pi-auth","login":true}}` together with `llm.provider: "openai-codex"` and an explicit built-in model. Use the Pi runtime image. The existing dedicated `ReadWriteOncePod` claim persists `/home/agent/.pi/agent`, including Pi's own authentication store. Login mode drains task Jobs and creates a login pod; run Pi's `/login` there, select OpenAI Codex and device code, then set `login` to false. Pi subscription tasks are limited to one at a time. Credentials stay on the PVC and are never returned by the API.
 
 For a native subscription CLI, set `runtime` to `{"engine":"codex","subscription":{"claimName":"codex-reviewer-home","login":true}}` or use `"claude"` as the engine. The claim must be an existing dedicated `ReadWriteOncePod` PVC, and `imageRef` must point to the subscription runtime image. While `login` is true, the operator withholds task Jobs and creates a login pod for the official CLI sign-in; set it to false after login. The API stores no subscription credentials. Native jobs are limited to one at a time per agent. See [the CRD reference](crd-reference.md) for the login commands and security details.

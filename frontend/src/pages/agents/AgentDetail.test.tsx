@@ -476,6 +476,7 @@ describe('AgentDetail', () => {
     await waitFor(() => expect(putCalls).toHaveLength(1))
     expect(JSON.parse(putCalls[0]).llm.provider).toBe('ollama-cloud')
     await userEvent.click(screen.getByLabelText('ChatGPT subscription'))
+    await userEvent.selectOptions(screen.getByLabelText('Credential storage'), 'existing')
     await userEvent.type(screen.getByLabelText('Credential PVC'), 'pi-auth')
     await userEvent.click(screen.getByRole('button', { name: 'Save runtime' }))
     await waitFor(() => expect(putCalls).toHaveLength(2))

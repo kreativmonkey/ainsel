@@ -79,7 +79,7 @@ function RuntimeSettings({ agent }: AgentImageSectionProps) {
     : ['codex', 'claude', 'openai-codex'].includes(storedProvider) ? '' : storedProvider
   return <Panel title="Subscription runtime" className="cropped">
     <RuntimeFields value={runtime} onChange={setRuntime} />
-    <Button disabled={update.isPending || ((runtime.engine !== 'pi' || runtime.subscription) && !runtime.subscription?.claimName.trim())}
+    <Button disabled={update.isPending || ((runtime.engine !== 'pi' || runtime.subscription) && !runtime.subscription?.createClaim && !runtime.subscription?.claimName.trim())}
       onClick={() => update.mutate({ id: agent.id, body: { name: agent.name, runtime, llm: { model: agent.llm?.model ?? '', provider: runtime.engine === 'pi' ? piProvider : runtime.engine } } })}>
       {update.isPending ? 'Saving…' : 'Save runtime'}
     </Button>

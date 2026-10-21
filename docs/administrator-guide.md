@@ -804,7 +804,11 @@ authentication, the complete tool reference, and example conversations.
 ### ChatGPT subscriptions with Pi
 
 Select the Pi runtime and enable **ChatGPT subscription** in the agent form.
-Choose an existing dedicated `ReadWriteOncePod` credential PVC, a built-in
+Keep **Create dedicated storage (5 GiB)** to let AInsel provision a retained
+credential PVC using the cluster default StorageClass (CSI RWOP support is
+required), or choose **Use existing PVC** for a dedicated `ReadWriteOncePod`
+claim. Credential storage remains after deleting an agent; remove the PVC
+manually when no longer needed. Choose a built-in
 Codex model and login mode, then save. The provider is `openai-codex`.
 Use the [Pi login procedure](crd-reference.md#pi-with-a-chatgpt-subscription)
 to sign in, then disable login mode to resume queued tasks. The Pi runtime

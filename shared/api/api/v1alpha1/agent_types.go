@@ -145,12 +145,16 @@ type AgentRuntime struct {
 }
 
 // AgentSubscription configures direct end-user provider authentication. The operator
-// never reads authentication files. Provision a dedicated ReadWriteOncePod PVC.
+// never reads authentication files. Each agent uses a dedicated ReadWriteOncePod PVC.
 type AgentSubscription struct {
-	// ClaimName references an existing PVC in the Agent namespace. Pi mounts it at
+	// ClaimName references a dedicated PVC in the Agent namespace. Pi mounts it at
 	// /home/agent/.pi/agent; native CLIs mount it at /home/agent.
 	// +kubebuilder:validation:MinLength=1
 	ClaimName string `json:"claimName"`
+	// CreateClaim provisions a retained 5Gi Filesystem ReadWriteOncePod PVC using
+	// the default StorageClass. Managed claims retain this Agent UID provenance.
+	// +optional
+	CreateClaim bool `json:"createClaim,omitempty"`
 	// Login drains task Jobs and opens an interactive login pod instead.
 	// +optional
 	Login bool `json:"login,omitempty"`

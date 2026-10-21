@@ -262,7 +262,7 @@ export function AgentForm() {
                 onChange={(v) => {
                   setValue('llm.provider', v, { shouldDirty: true })
                   if (v === 'openai-codex') {
-                    setValue('runtime', { engine: 'pi', subscription: watch('runtime.subscription') ?? { claimName: '', login: false } }, { shouldDirty: true })
+                    setValue('runtime', { engine: 'pi', subscription: watch('runtime.subscription') ?? { claimName: '', createClaim: true, login: false } }, { shouldDirty: true })
                   } else if (watch('runtime.subscription')) {
                     setValue('runtime', { engine: 'pi' }, { shouldDirty: true })
                   }

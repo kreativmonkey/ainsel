@@ -12,9 +12,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	api "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
@@ -249,5 +252,121 @@ func TestPiSubscriptionRequiresExplicitModel(t *testing.T) {
 	r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).Build()}
 	if err := r.validateSubscription(context.Background(), a); err == nil {
 		t.Fatal("Pi subscription accepted implicit model selection")
+	}
+}
+
+func TestManagedSubscriptionClaim(t *testing.T) {
+	ctx := context.Background()
+	a := subscriptionAgent()
+	a.Spec.Runtime.Subscription.CreateClaim = true
+	r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).Build()}
+	if err := r.reconcileSubscriptionClaim(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	var pvc corev1.PersistentVolumeClaim
+	key := types.NamespacedName{Namespace: a.Namespace, Name: "private-home"}
+	if err := r.Get(ctx, key, &pvc); err != nil {
+		t.Fatal(err)
+	}
+	if len(pvc.OwnerReferences) != 0 || pvc.Labels[subscriptionAgentUIDLabel] != string(a.UID) {
+		t.Fatalf("credential claim must be retained with provenance: %+v", pvc.ObjectMeta)
+	}
+	size := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if size.String() != "5Gi" || pvc.Spec.StorageClassName != nil || pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
+		t.Fatalf("unexpected storage spec: %+v", pvc.Spec)
+	}
+	if err := r.validateSubscription(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSubscriptionClaim(ctx, a); err != nil {
+		t.Fatalf("idempotence: %v", err)
+	}
+	a.UID = "replacement-agent"
+	if err := r.reconcileSubscriptionClaim(ctx, a); err == nil {
+		t.Fatal("adopted retained credentials from deleted Agent")
+	}
+}
+
+func TestManagedSubscriptionRefusesUnrelatedPVC(t *testing.T) {
+	a := subscriptionAgent()
+	a.Spec.Runtime.Subscription.CreateClaim = true
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "private-home", Namespace: a.Namespace}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}}}
+	r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).WithObjects(pvc).Build()}
+	if err := r.reconcileSubscriptionClaim(context.Background(), a); err == nil {
+		t.Fatal("adopted unrelated PVC")
+	}
+}
+
+func TestExistingSubscriptionClaimMustExist(t *testing.T) {
+	a := subscriptionAgent()
+	r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).Build()}
+	if err := r.reconcileSubscriptionClaim(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.validateSubscription(context.Background(), a); err == nil {
+		t.Fatal("accepted missing existing claim")
+	}
+	var claims corev1.PersistentVolumeClaimList
+	if err := r.List(context.Background(), &claims); err != nil {
+		t.Fatal(err)
+	}
+	if len(claims.Items) != 0 {
+		t.Fatal("created PVC without opt-in")
+	}
+}
+
+// Model a concurrent creator whose object appears after our cached NotFound.
+type racingSubscriptionClient struct {
+	client.Client
+	uid types.UID
+}
+
+func (c *racingSubscriptionClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	pvc, ok := obj.(*corev1.PersistentVolumeClaim)
+	if !ok {
+		return c.Client.Create(ctx, obj, opts...)
+	}
+	pvc.Labels[subscriptionAgentUIDLabel] = string(c.uid)
+	if err := c.Client.Create(ctx, obj, opts...); err != nil {
+		return err
+	}
+	return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, obj.GetName())
+}
+
+func TestManagedSubscriptionClaimCreateRace(t *testing.T) {
+	for _, uid := range []types.UID{"agent-uid", "unrelated-agent"} {
+		t.Run(string(uid), func(t *testing.T) {
+			a := subscriptionAgent()
+			a.Spec.Runtime.Subscription.CreateClaim = true
+			c := &racingSubscriptionClient{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).Build(), uid: uid}
+			r := &AgentReconciler{Client: c}
+			if err := r.reconcileSubscriptionClaim(context.Background(), a); err == nil {
+				t.Fatal("create race must requeue before trusting claim")
+			}
+			err := r.reconcileSubscriptionClaim(context.Background(), a)
+			if (err == nil) != (uid == a.UID) {
+				t.Fatalf("race provenance %s: %v", uid, err)
+			}
+		})
+	}
+}
+
+func TestExistingSubscriptionCannotBypassManagedClaimProvenance(t *testing.T) {
+	for _, uid := range []string{"agent-uid", "other-agent-uid", ""} {
+		t.Run("provenance-"+uid, func(t *testing.T) {
+			a := subscriptionAgent()
+			// Existing-claim mode must enforce provenance even without createClaim.
+			a.Spec.Runtime.Subscription.CreateClaim = false
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "private-home", Namespace: a.Namespace,
+					Labels: map[string]string{subscriptionAgentUIDLabel: uid}},
+				Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}},
+			}
+			r := &AgentReconciler{Client: fake.NewClientBuilder().WithScheme(jobModeScheme()).WithObjects(pvc).Build()}
+			err := r.validateSubscription(context.Background(), a)
+			if (err == nil) != (uid == string(a.UID)) {
+				t.Fatalf("provenance %q: %v", uid, err)
+			}
+		})
 	}
 }

@@ -71,3 +71,42 @@ func TestPiSubscriptionProviderValidation(t *testing.T) {
 		t.Fatal("Codex subscription accepted without auth PVC")
 	}
 }
+
+func TestManagedSubscriptionClaimNames(t *testing.T) {
+	for _, engine := range []string{"pi", "codex", "claude"} {
+		t.Run(engine, func(t *testing.T) {
+			s := testServer(t, testAgentImage("img-1"))
+			s.mux.HandleFunc("/api/v1/agents", s.handleAgents)
+			s.mux.HandleFunc("/api/v1/agents/", s.handleAgent)
+			provider := engine
+			if engine == "pi" {
+				provider = "openai-codex"
+			}
+			body := `{"name":"managed","imageRef":{"name":"img-1"},"llm":{"provider":"` + provider + `","model":"gpt-5"},"runtime":{"engine":"` + engine + `","subscription":{"createClaim":true,"login":true}}}`
+			rec := httptest.NewRecorder()
+			s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body)))
+			if rec.Code != 201 {
+				t.Fatalf("%d: %s", rec.Code, rec.Body.String())
+			}
+			var out SimpleAgentResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if !out.Runtime.Subscription.CreateClaim || out.Runtime.Subscription.ClaimName != out.ID+"-home" {
+				t.Fatalf("generated claim: %+v", out.Runtime.Subscription)
+			}
+			rec = httptest.NewRecorder()
+			s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+out.ID, bytes.NewBufferString(`{"runtime":{"engine":"`+engine+`","subscription":{"createClaim":true}}}`)))
+			if rec.Code != 200 {
+				t.Fatalf("%d: %s", rec.Code, rec.Body.String())
+			}
+			var updated SimpleAgentResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+				t.Fatal(err)
+			}
+			if updated.Runtime.Subscription.ClaimName != out.Runtime.Subscription.ClaimName {
+				t.Fatal("update changed generated credential storage")
+			}
+		})
+	}
+}

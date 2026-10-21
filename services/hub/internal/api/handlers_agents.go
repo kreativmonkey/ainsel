@@ -148,6 +148,13 @@ type AgentRuntimeInfo struct {
 	Subscription *agentv1alpha1.AgentSubscription `json:"subscription,omitempty"`
 }
 
+// The hub supplies a stable name before validating or persisting managed storage.
+func defaultSubscriptionClaim(runtime *AgentRuntimeInfo, agentID string) {
+	if runtime != nil && runtime.Subscription != nil && runtime.Subscription.CreateClaim && runtime.Subscription.ClaimName == "" {
+		runtime.Subscription.ClaimName = agentID + "-home"
+	}
+}
+
 func runtimeProblem(runtime *AgentRuntimeInfo) string {
 	if runtime == nil {
 		return ""
@@ -727,6 +734,9 @@ func (s *Server) createAgent(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 
+	id := generateID("a")
+	defaultSubscriptionClaim(req.Runtime, id)
+
 	if problem := runtimeProblem(req.Runtime); problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
 		return
@@ -767,8 +777,6 @@ func (s *Server) createAgent(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return
 	}
-
-	id := generateID("a")
 
 	agent := agentv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{
@@ -965,6 +973,8 @@ func (s *Server) updateAgent(ctx context.Context, w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+
+	defaultSubscriptionClaim(req.Runtime, existing.Name)
 
 	if problem := runtimeProblem(req.Runtime); problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
