@@ -42,13 +42,14 @@ export function inlineReview(text) {
       fail('invalid inline finding');
     }
     if (finding.severity === 'blocker') blockers++;
-    const label = finding.severity === 'blocker' ? 'Blocker' : 'Verbesserungsvorschlag';
+    const label = finding.severity === 'blocker' ? 'Blocker' : 'Suggestion';
     return { path: finding.path, line: finding.line, side: 'RIGHT', body: `**${label}:** ${finding.body}` };
   });
-  const recommendation = !review.reviewable ? 'Keine Merge-Empfehlung (Prüfung unvollständig)'
-    : blockers ? 'Do Not Merge' : 'Merge möglich';
-  const counts = `${blockers} Blocker · ${comments.length - blockers} Verbesserungsvorschläge`;
-  return { body: `## Empfehlung: ${recommendation}\n\n${review.summary}\n\n${counts}`, comments };
+  const recommendation = !review.reviewable ? 'No Merge Recommendation (Review Incomplete)'
+    : blockers ? 'Do Not Merge' : 'Ready to Merge';
+  const suggestions = comments.length - blockers;
+  const counts = `${blockers} ${blockers === 1 ? 'blocker' : 'blockers'} · ${suggestions} ${suggestions === 1 ? 'suggestion' : 'suggestions'}`;
+  return { body: `## Recommendation: ${recommendation}\n\n${review.summary}\n\n${counts}`, comments };
 }
 
 function appJwt(appId, privateKey, now = Date.now()) {

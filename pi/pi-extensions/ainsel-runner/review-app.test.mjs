@@ -67,7 +67,7 @@ test('inline command publishes findings as line review threads', async () => {
   assert.deepEqual(await publishReview(publication, text, credentials, fetcher), { alreadyPublished: false });
   const review = calls.find(call => call.path.endsWith('/reviews') && call.options.method === 'POST');
   assert.deepEqual(JSON.parse(review.options.body), {
-    event: 'COMMENT', commit_id: sha, body: '## Empfehlung: Do Not Merge\n\nFound one issue\n\n1 Blocker · 0 Verbesserungsvorschläge\n\n<!-- ainsel-review-command:42 -->',
+    event: 'COMMENT', commit_id: sha, body: '## Recommendation: Do Not Merge\n\nFound one issue\n\n1 blocker · 0 suggestions\n\n<!-- ainsel-review-command:42 -->',
     comments: [{ path: 'src/app.js', line: 4, side: 'RIGHT', body: '**Blocker:** Handle this case.' }],
   });
 });
@@ -80,11 +80,12 @@ test('inline findings must refer to added lines in the current diff', async () =
     await assert.rejects(publishReview(publication, JSON.stringify({ reviewable: true, summary: 'Summary', findings: [finding] }), credentials, fetcher), /line is not added|outside the pull request diff/);
     assert.equal(calls.some(call => call.path.endsWith('/reviews') && call.options.method === 'POST'), false);
   }
-  assert.deepEqual(inlineReview(JSON.stringify({ reviewable: true, summary: 'Clean', findings: [] })), { body: '## Empfehlung: Merge möglich\n\nClean\n\n0 Blocker · 0 Verbesserungsvorschläge', comments: [] });
+  assert.deepEqual(inlineReview(JSON.stringify({ reviewable: true, summary: 'Clean', findings: [] })), { body: '## Recommendation: Ready to Merge\n\nClean\n\n0 blockers · 0 suggestions', comments: [] });
   const suggestion = inlineReview(JSON.stringify({ reviewable: true, summary: 'Minor issue', findings: [{ severity: 'suggestion', path: 'src/app.js', line: 4, body: 'Consider a test.' }] }));
-  assert.match(suggestion.body, /Empfehlung: Merge möglich/);
-  assert.match(suggestion.comments[0].body, /Verbesserungsvorschlag/);
-  assert.match(inlineReview(JSON.stringify({ reviewable: false, summary: 'Diff unavailable', findings: [] })).body, /Keine Merge-Empfehlung/);
+  assert.match(suggestion.body, /Recommendation: Ready to Merge/);
+  assert.match(suggestion.body, /1 suggestion/);
+  assert.match(suggestion.comments[0].body, /Suggestion/);
+  assert.match(inlineReview(JSON.stringify({ reviewable: false, summary: 'Diff unavailable', findings: [] })).body, /No Merge Recommendation/);
   assert.throws(() => inlineReview('Not JSON'), /must be JSON/);
 });
 
