@@ -29,17 +29,26 @@ export function inlineReview(text) {
   try { review = JSON.parse(text); } catch { fail('inline review must be JSON'); }
   if (!review || typeof review !== 'object' || Array.isArray(review)
       || typeof review.summary !== 'string' || !review.summary.trim() || review.summary.length > 60000
+      || typeof review.reviewable !== 'boolean'
       || !Array.isArray(review.findings) || review.findings.length > 20) fail('invalid inline review');
+  if (!review.reviewable && review.findings.length) fail('incomplete review cannot contain findings');
+  let blockers = 0;
   const comments = review.findings.map(finding => {
     if (!finding || typeof finding !== 'object' || Array.isArray(finding)
+        || !['blocker', 'suggestion'].includes(finding.severity)
         || typeof finding.path !== 'string' || !finding.path
         || !Number.isSafeInteger(finding.line) || finding.line <= 0
         || typeof finding.body !== 'string' || !finding.body.trim() || finding.body.length > 8000) {
       fail('invalid inline finding');
     }
-    return { path: finding.path, line: finding.line, side: 'RIGHT', body: finding.body };
+    if (finding.severity === 'blocker') blockers++;
+    const label = finding.severity === 'blocker' ? 'Blocker' : 'Verbesserungsvorschlag';
+    return { path: finding.path, line: finding.line, side: 'RIGHT', body: `**${label}:** ${finding.body}` };
   });
-  return { body: review.summary, comments };
+  const recommendation = !review.reviewable ? 'Keine Merge-Empfehlung (Prüfung unvollständig)'
+    : blockers ? 'Do Not Merge' : 'Merge möglich';
+  const counts = `${blockers} Blocker · ${comments.length - blockers} Verbesserungsvorschläge`;
+  return { body: `## Empfehlung: ${recommendation}\n\n${review.summary}\n\n${counts}`, comments };
 }
 
 function appJwt(appId, privateKey, now = Date.now()) {

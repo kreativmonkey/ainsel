@@ -63,24 +63,28 @@ test('inline command publishes findings as line review threads', async () => {
   const { fetcher, calls } = github();
   const { publication } = await resolveReviewComment(inlineTask, repositories, credentials, fetcher);
   assert.equal(publication.command, '/review-inline');
-  const text = JSON.stringify({ summary: 'Found one issue', findings: [{ path: 'src/app.js', line: 4, body: 'Handle this case.' }] });
+  const text = JSON.stringify({ reviewable: true, summary: 'Found one issue', findings: [{ severity: 'blocker', path: 'src/app.js', line: 4, body: 'Handle this case.' }] });
   assert.deepEqual(await publishReview(publication, text, credentials, fetcher), { alreadyPublished: false });
   const review = calls.find(call => call.path.endsWith('/reviews') && call.options.method === 'POST');
   assert.deepEqual(JSON.parse(review.options.body), {
-    event: 'COMMENT', commit_id: sha, body: 'Found one issue\n\n<!-- ainsel-review-command:42 -->',
-    comments: [{ path: 'src/app.js', line: 4, side: 'RIGHT', body: 'Handle this case.' }],
+    event: 'COMMENT', commit_id: sha, body: '## Empfehlung: Do Not Merge\n\nFound one issue\n\n1 Blocker · 0 Verbesserungsvorschläge\n\n<!-- ainsel-review-command:42 -->',
+    comments: [{ path: 'src/app.js', line: 4, side: 'RIGHT', body: '**Blocker:** Handle this case.' }],
   });
 });
 
 test('inline findings must refer to added lines in the current diff', async () => {
   const publication = { repository: 'keller-IO/infrastructure', number: 7, command: '/review-inline', commentId: 42, headSha: sha, baseSha, installationId: 123 };
-  for (const finding of [{ path: 'src/app.js', line: 3, body: 'Wrong line' },
-    { path: 'other.js', line: 4, body: 'Wrong file' }]) {
+  for (const finding of [{ severity: 'suggestion', path: 'src/app.js', line: 3, body: 'Wrong line' },
+    { severity: 'suggestion', path: 'other.js', line: 4, body: 'Wrong file' }]) {
     const { fetcher, calls } = github();
-    await assert.rejects(publishReview(publication, JSON.stringify({ summary: 'Summary', findings: [finding] }), credentials, fetcher), /line is not added|outside the pull request diff/);
+    await assert.rejects(publishReview(publication, JSON.stringify({ reviewable: true, summary: 'Summary', findings: [finding] }), credentials, fetcher), /line is not added|outside the pull request diff/);
     assert.equal(calls.some(call => call.path.endsWith('/reviews') && call.options.method === 'POST'), false);
   }
-  assert.deepEqual(inlineReview(JSON.stringify({ summary: 'Clean', findings: [] })), { body: 'Clean', comments: [] });
+  assert.deepEqual(inlineReview(JSON.stringify({ reviewable: true, summary: 'Clean', findings: [] })), { body: '## Empfehlung: Merge möglich\n\nClean\n\n0 Blocker · 0 Verbesserungsvorschläge', comments: [] });
+  const suggestion = inlineReview(JSON.stringify({ reviewable: true, summary: 'Minor issue', findings: [{ severity: 'suggestion', path: 'src/app.js', line: 4, body: 'Consider a test.' }] }));
+  assert.match(suggestion.body, /Empfehlung: Merge möglich/);
+  assert.match(suggestion.comments[0].body, /Verbesserungsvorschlag/);
+  assert.match(inlineReview(JSON.stringify({ reviewable: false, summary: 'Diff unavailable', findings: [] })).body, /Keine Merge-Empfehlung/);
   assert.throws(() => inlineReview('Not JSON'), /must be JSON/);
 });
 
