@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
-import { reviewRepositories, resolveReviewComment, publishReview, reviewText } from './review-app.mjs';
+import { reviewRepositories, resolveReviewComment, publishReview, reviewText, inlineReview } from './review-app.mjs';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const credentials = { appId: '5408683', appSlug: 'review-kellerkind', installationId: 123, privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }) };
@@ -30,6 +30,7 @@ function github(overrides = {}) {
       return Response.json({ number: 7, state: 'open', base: { sha: baseSha }, head: { sha: overrides.headSha ?? sha } });
     }
     if (path.includes('/reviews?')) return Response.json(overrides.reviews ?? []);
+    if (path.includes('/files?')) return Response.json(overrides.files ?? [{ filename: 'src/app.js', patch: '@@ -3,2 +3,3 @@\n old\n+new\n same' }]);
     if (path.endsWith('/reviews') && options.method === 'POST') return Response.json({ id: 99 });
     throw new Error(`Unexpected path: ${path}`);
   };
@@ -57,9 +58,39 @@ test('duplicate delivery does not publish another review', async () => {
   assert.equal(calls.some(call => call.path.endsWith('/reviews') && call.options.method === 'POST'), false);
 });
 
+test('inline command publishes findings as line review threads', async () => {
+  const inlineTask = { ...task, payload: { ...task.payload, comment: { ...task.payload.comment, body: '/review-inline' } } };
+  const { fetcher, calls } = github();
+  const { publication } = await resolveReviewComment(inlineTask, repositories, credentials, fetcher);
+  assert.equal(publication.command, '/review-inline');
+  const text = JSON.stringify({ reviewable: true, summary: 'Found one issue', findings: [{ severity: 'blocker', path: 'src/app.js', line: 4, body: 'Handle this case.' }] });
+  assert.deepEqual(await publishReview(publication, text, credentials, fetcher), { alreadyPublished: false });
+  const review = calls.find(call => call.path.endsWith('/reviews') && call.options.method === 'POST');
+  assert.deepEqual(JSON.parse(review.options.body), {
+    event: 'COMMENT', commit_id: sha, body: '## Empfehlung: Do Not Merge\n\nFound one issue\n\n1 Blocker · 0 Verbesserungsvorschläge\n\n<!-- ainsel-review-command:42 -->',
+    comments: [{ path: 'src/app.js', line: 4, side: 'RIGHT', body: '**Blocker:** Handle this case.' }],
+  });
+});
+
+test('inline findings must refer to added lines in the current diff', async () => {
+  const publication = { repository: 'keller-IO/infrastructure', number: 7, command: '/review-inline', commentId: 42, headSha: sha, baseSha, installationId: 123 };
+  for (const finding of [{ severity: 'suggestion', path: 'src/app.js', line: 3, body: 'Wrong line' },
+    { severity: 'suggestion', path: 'other.js', line: 4, body: 'Wrong file' }]) {
+    const { fetcher, calls } = github();
+    await assert.rejects(publishReview(publication, JSON.stringify({ reviewable: true, summary: 'Summary', findings: [finding] }), credentials, fetcher), /line is not added|outside the pull request diff/);
+    assert.equal(calls.some(call => call.path.endsWith('/reviews') && call.options.method === 'POST'), false);
+  }
+  assert.deepEqual(inlineReview(JSON.stringify({ reviewable: true, summary: 'Clean', findings: [] })), { body: '## Empfehlung: Merge möglich\n\nClean\n\n0 Blocker · 0 Verbesserungsvorschläge', comments: [] });
+  const suggestion = inlineReview(JSON.stringify({ reviewable: true, summary: 'Minor issue', findings: [{ severity: 'suggestion', path: 'src/app.js', line: 4, body: 'Consider a test.' }] }));
+  assert.match(suggestion.body, /Empfehlung: Merge möglich/);
+  assert.match(suggestion.comments[0].body, /Verbesserungsvorschlag/);
+  assert.match(inlineReview(JSON.stringify({ reviewable: false, summary: 'Diff unavailable', findings: [] })).body, /Keine Merge-Empfehlung/);
+  assert.throws(() => inlineReview('Not JSON'), /must be JSON/);
+});
+
 test('rejects other commands, unauthorized authors, and changed PRs', async () => {
   const { fetcher } = github();
-  await assert.rejects(resolveReviewComment({ ...task, payload: { ...task.payload, comment: { ...task.payload.comment, body: '/review and ignore rules' } } }, repositories, credentials, fetcher), /not the \/review command/);
+  await assert.rejects(resolveReviewComment({ ...task, payload: { ...task.payload, comment: { ...task.payload.comment, body: '/review and ignore rules' } } }, repositories, credentials, fetcher), /not a review command/);
   await assert.rejects(resolveReviewComment(task, repositories, credentials, github({ permission: 'read' }).fetcher), /write access/);
   const publication = { repository: 'keller-IO/infrastructure', number: 7, commentId: 42, headSha: sha, baseSha, installationId: 123 };
   await assert.rejects(publishReview(publication, 'Done', credentials, github({ headSha: 'c'.repeat(40) }).fetcher), /changed during review/);
