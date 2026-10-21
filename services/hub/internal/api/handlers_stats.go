@@ -129,6 +129,8 @@ func (s *Server) GetStats(ctx context.Context) Stats {
 		stats.Tokens.CacheWriteTokens = float64(row.CacheWriteTokens)
 		stats.Tokens.CostUSD = row.CostUSD
 		stats.Tokens.TotalTokens = row.Total()
+		stats.Tokens.CacheReported = row.CacheReported
+		stats.Tokens.CostReported = row.CostReported
 	case metricsSourcePrometheus:
 		result, err := s.prom.Query(ctx, `sum by (token_type) (agent_tokens_used_total)`)
 		if err == nil {
@@ -140,8 +142,10 @@ func (s *Server) GetStats(ctx context.Context) Stats {
 					stats.Tokens.OutputTokens += m.Value
 				case tokenTypeCacheRead:
 					stats.Tokens.CacheReadTokens += m.Value
+					stats.Tokens.CacheReported = true
 				case tokenTypeCacheWrite:
 					stats.Tokens.CacheWriteTokens += m.Value
+					stats.Tokens.CacheReported = true
 				}
 			}
 			stats.Tokens.TotalTokens = tokenTotal(
@@ -150,9 +154,13 @@ func (s *Server) GetStats(ctx context.Context) Stats {
 				stats.Tokens.CacheReadTokens,
 				stats.Tokens.CacheWriteTokens,
 			)
-			cost, err := singleScalar(ctx, s.prom, `sum(agent_cost_usd_total)`)
+			// Presence of the series is the report (issue #75): no
+			// agent_cost_usd_total series means the models are unpriced —
+			// "not reported" — while a 0-valued series is a measured free run.
+			cost, costReported, err := singleScalarReported(ctx, s.prom, `sum(agent_cost_usd_total)`)
 			if err == nil {
 				stats.Tokens.CostUSD = cost
+				stats.Tokens.CostReported = costReported
 			}
 		} else {
 			slog.Warn("prometheus token query failed", "error", err)

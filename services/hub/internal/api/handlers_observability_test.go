@@ -380,9 +380,16 @@ func TestObservability_AgentsAggregatesTokensAndInvocations(t *testing.T) {
 		t.Errorf("dev total must include cache traffic, got %v", dev.TotalTokens)
 	}
 	// reviewer publishes no cache series at all (provider without prompt
-	// caching); its total must still be correct and the fields must be zero.
+	// caching); its total must still be correct, the fields must be zero, and
+	// the presence flag must say "not reported" (issue #75).
 	if rev.CacheReadTokens != 0 || rev.CacheWriteTokens != 0 || rev.TotalTokens != 1000 {
 		t.Errorf("reviewer tokens wrong: %+v", rev)
+	}
+	if !dev.CacheReported {
+		t.Errorf("dev cacheReported = false, want true (cache series exist)")
+	}
+	if rev.CacheReported {
+		t.Errorf("reviewer cacheReported = true, want false (no cache series)")
 	}
 	if dev.Invocations != 5 {
 		t.Errorf("dev invocations: expected 5, got %v", dev.Invocations)

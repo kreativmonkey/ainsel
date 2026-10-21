@@ -103,6 +103,7 @@ func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			IsAdmin  *bool   `json:"isAdmin"`
 			Password *string `json:"password"`
+			Disabled *bool   `json:"disabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -141,6 +142,53 @@ func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+		}
+		if body.Disabled != nil {
+			// Guards mirror deletion: no self-disable (an admin cutting
+			// themselves off would lock the UI from inside), and the last
+			// admin cannot be disabled. countAdmins counts all admin rows,
+			// including disabled ones; combined with the self-disable block
+			// this still guarantees at least one enabled admin exists.
+			if *body.Disabled {
+				caller, ok := oidc.FromContext(r.Context())
+				if ok && caller.Sub == id {
+					writeError(w, http.StatusConflict, "cannot disable your own account")
+					return
+				}
+				target, err := s.authzStore.GetUser(r.Context(), id)
+				if errors.Is(err, authz.ErrNotFound) {
+					writeError(w, http.StatusNotFound, "user not found")
+					return
+				}
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				if target.IsAdmin {
+					admins, err := s.countAdmins(r)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					if admins <= 1 {
+						writeError(w, http.StatusConflict, "cannot disable the last admin")
+						return
+					}
+				}
+			}
+			if err := s.authzStore.SetDisabled(r.Context(), id, *body.Disabled); err != nil {
+				if errors.Is(err, authz.ErrNotFound) {
+					writeError(w, http.StatusNotFound, "user not found")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			event := "user_enabled"
+			if *body.Disabled {
+				event = "user_disabled"
+			}
+			slog.Info(event, "log_type", "auth_event", "id", id)
 		}
 		if body.Password != nil {
 			// Admin password reset for any user with local credentials.

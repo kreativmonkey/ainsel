@@ -143,6 +143,37 @@ describe('Observability', () => {
     expect(screen.getByText('$12.34')).toBeInTheDocument()
   })
 
+  it('says "not reported" instead of 0% / $0.00 when the hub reports nothing', async () => {
+    // Issue #75: a window whose runtime never reported cache or cost must not
+    // render a measured-looking 0% or $0.00 — the numerics there are
+    // placeholders, and the tiles must say "not reported" instead.
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/observability/metrics/tokens/summary')) {
+        return Promise.resolve(new Response(
+          JSON.stringify({
+            totalTokens: 1200,
+            inputTokens: 1000,
+            outputTokens: 200,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            costUsd: 0,
+            cacheReported: false,
+            costReported: false,
+          }),
+          { status: 200 },
+        ))
+      }
+      return Promise.resolve(defaultFetch(url))
+    }))
+    renderWithProviders(<Observability />, { route: '/observability' })
+    await waitFor(() => expect(screen.getByText(/Cache Hit Rate/)).toBeInTheDocument())
+    expect(screen.getByText('not reported by the provider')).toBeInTheDocument()
+    expect(screen.getByText('not reported — model unpriced')).toBeInTheDocument()
+    // The placeholder zeros must not appear as measured figures.
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+    expect(screen.queryByText('$0.00')).not.toBeInTheDocument()
+  })
+
   it('renders cache and cost columns in the tokens table', async () => {
     renderWithProviders(<Observability />, { route: '/observability' })
     await waitFor(() =>

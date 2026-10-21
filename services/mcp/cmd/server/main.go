@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -43,13 +41,12 @@ func main() {
 	metadataURL := ""
 	metadataPath := "/.well-known/oauth-protected-resource"
 	if cfg.MCPResourceURL != "" {
-		resource, err := url.Parse(cfg.MCPResourceURL)
-		if err != nil || resource.Host == "" || (resource.Scheme != "https" && resource.Scheme != "http") || resource.RawQuery != "" || resource.Fragment != "" {
-			log.Error("MCP_RESOURCE_URL must be an absolute HTTP(S) URL without query or fragment")
+		var err error
+		metadataPath, metadataURL, err = auth.ProtectedResourceMetadataLocation(cfg.MCPResourceURL)
+		if err != nil {
+			log.Error("invalid MCP resource URL", "error", err)
 			os.Exit(1)
 		}
-		metadataPath += strings.TrimRight(resource.Path, "/")
-		metadataURL = resource.Scheme + "://" + resource.Host + metadataPath
 	}
 	oidcMW, err := auth.NewMiddleware(auth.Config{
 		Issuer:              cfg.OIDCIssuer,
@@ -88,7 +85,7 @@ func main() {
 		metadata, err := auth.ProtectedResourceMetadataHandler(auth.MetadataConfig{
 			ResourceURL: cfg.MCPResourceURL,
 			Issuer:      cfg.OIDCIssuer,
-			Scopes:      os.Getenv("OIDC_SCOPES"),
+			Scopes:      cfg.OIDCScopes,
 		})
 		if err != nil {
 			log.Error("OAuth protected resource metadata", "error", err)

@@ -51,9 +51,6 @@ The operator pod itself reads the following environment variables to control wha
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `FORGEJO_URL` | Optional | Forgejo API URL. When set, propagated as a literal value to each agent's `FORGEJO_URL`. |
-| `FORGEJO_TOKEN_SECRET_NAME` | Optional | Name of a Kubernetes Secret in the agent's namespace containing the Forgejo API token. When set, agents get `FORGEJO_TOKEN` via `valueFrom.secretKeyRef` (the operator never reads the token value). |
-| `FORGEJO_TOKEN_SECRET_KEY` | Optional | Key inside `FORGEJO_TOKEN_SECRET_NAME`. Defaults to `token`. |
 | `HUB_URL` | Optional | Hub API base URL, propagated to agent pods and MCP sidecars so the runtime can poll for tasks. |
 
 ## Agent Environment Variables
@@ -63,14 +60,32 @@ When the Agent controller creates a Deployment for an Agent CR, it sets these en
 | Variable | Source | Description |
 |----------|--------|-------------|
 | `AGENT_NAME` | `metadata.name` | Agent name |
-| `AGENT_PROVIDER` | `spec.runtime.provider` | LLM provider |
-| `CLAUDE_MODEL` / `MISTRAL_MODEL` | `spec.llm.model` | LLM model |
+| `PI_PROVIDER` | `spec.llm.provider` | Pi provider key resolved from the explicit provider (`ollama-api-key`, `opencode`, `alibaba-cloud`, `openai` for custom). There is no fallback: an empty or unknown provider fails the reconcile with `Ready=False` / `InvalidLLMProvider` (issue #96) |
+| `AINSEL_LLM_MODEL` | `spec.llm.model` | LLM model — the canonical, provider-neutral runtime contract |
+| `OLLAMA_CLOUD_MODEL` | `spec.llm.model` | Transitional alias of `AINSEL_LLM_MODEL`, dual-written with the same value for one release so old runtime images keep working (issue #96). Remove after the alias window |
+| `OLLAMA_CLOUD_MAX_TURNS` | `spec.llm.maxTurns` | Tool-loop turn cap (legacy name; a provider-neutral rename is a known follow-up) |
 | `HUB_URL` | Operator env (`HUB_URL`) | Hub API the runtime polls for tasks |
 | `HUB_INTERNAL_VALIDATE_SECRET` | Operator env | `X-Internal-Token` used against the hub's internal endpoints. Platform-owned: declarations on the AgentImage are dropped in favour of this. |
 | `AGENT_PERSONA_PATH` | Mount path | Path to persona file |
-| `FORGEJO_URL` | Operator env (`FORGEJO_URL`) | Forgejo API URL |
-| `FORGEJO_TOKEN` | `secretKeyRef` (configured via `FORGEJO_TOKEN_SECRET_NAME` / `FORGEJO_TOKEN_SECRET_KEY` on the operator) | Forgejo API token |
-| `HUB_ENABLED` | Constant: `true` | Enables publishing of task lifecycle events to the hub backend |
+
+## Image Digest Resolution (restart-on-rebuild)
+
+Before writing an agent Deployment, the operator resolves the image tag to the
+registry manifest digest and stamps it on the pod template as
+`ainsel.dev/image-digest`. When a mutable tag (e.g. `:dev`) is rebuilt, the
+digest changes and Kubernetes rolls the pods so the agent picks up the new
+image. Digest-pinned references (`repo@sha256:…`) are used as-is.
+
+Authentication is anonymous, with an anonymous Docker Hub pull token for
+`docker.io`. A registry that demands credentials — GHCR, ECR, Harbor, any
+private registry — therefore fails resolution, as does a registry outage.
+
+That failure is non-blocking: the Deployment still reconciles, only the digest
+annotation is skipped, so the agent keeps running the old image until something
+else restarts it. The failure is reported as an `Error` log line and a Warning
+event `ImageDigestResolutionFailed` on the Agent, which is the signal that
+authenticated digest resolution (`WWW-Authenticate` challenge handling plus
+`imagePullSecrets`) is needed rather than a registry misconfiguration.
 
 ## Scaling
 
@@ -140,7 +155,7 @@ for work" is distinguishable from "broken": `mode`, `desired`, and a `reason` of
 `Disabled`.
 
 ```console
-$ kubectl get agent.ainsel.dev a-reviewer -n ainsel-dev -o jsonpath='{.status.scaling}'
+$ kubectl get agent.ainsel.dev a-reviewer -n ainsel -o jsonpath='{.status.scaling}'
 {"desired":0,"message":"quiet for 4m12s","mode":"queue","reason":"ScaledToZero"}
 ```
 

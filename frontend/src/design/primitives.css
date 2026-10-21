@@ -320,6 +320,9 @@ table.reg tbody td {
 table.reg tbody tr:hover td { background: var(--hover-subtle); }
 table.reg tbody tr.row-err td { background: var(--signal-haze); }
 table.reg tbody tr.row-stale td { background: rgba(128, 128, 128, 0.06); }
+/* Muted text colour instead of row opacity: opacity would also fade the
+   "disabled" badge and the Enable button below WCAG contrast. */
+table.reg tbody tr.row-disabled td { color: var(--ink-4); }
 table.reg .rowno {
   font-family: var(--mono);
   color: var(--ink-4);

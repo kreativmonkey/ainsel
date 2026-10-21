@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -12,6 +13,22 @@ type MetadataConfig struct {
 	ResourceURL string // Externally-reachable MCP URL, e.g. https://ainsel.example.com/mcp
 	Issuer      string // Actual OIDC authorization server issuer
 	Scopes      string // Space-separated scopes; defaults to standard OIDC scopes
+}
+
+const protectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
+
+// ProtectedResourceMetadataLocation validates the public MCP resource URL and
+// returns the RFC 9728 metadata path to serve plus its absolute URL for the
+// WWW-Authenticate challenge. The resource must be an absolute HTTP(S) URL
+// without credentials, query or fragment.
+func ProtectedResourceMetadataLocation(resourceURL string) (path, metadataURL string, err error) {
+	resource, err := url.Parse(resourceURL)
+	if err != nil || resource.Host == "" || (resource.Scheme != "https" && resource.Scheme != "http") ||
+		resource.User != nil || resource.RawQuery != "" || resource.Fragment != "" {
+		return "", "", fmt.Errorf("MCP_RESOURCE_URL must be an absolute HTTP(S) URL without credentials, query or fragment")
+	}
+	path = protectedResourceMetadataPath + strings.TrimRight(resource.Path, "/")
+	return path, resource.Scheme + "://" + resource.Host + path, nil
 }
 
 // ProtectedResourceMetadataHandler serves /.well-known/oauth-protected-resource

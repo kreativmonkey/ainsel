@@ -144,6 +144,30 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// 4.25. Explicit LLM provider: the operator is authoritative even for
+	// Agents stored before the CRD enum landed (and for the empty value,
+	// which stays schema-valid for one release). Fail the reconcile loudly
+	// instead of falling back to a built-in provider — an implicit provider
+	// would send the agent's key and prompt traffic to a third-party SaaS
+	// the user never chose (issue #96). No requeue: the object only changes
+	// on user edit, which triggers a fresh reconcile.
+	if !nativeRuntime(&agent) {
+		if _, err := resolvePiProvider(&agent); err != nil {
+			apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+				Type:               ainselv1alpha1.AgentConditionReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "InvalidLLMProvider",
+				Message:            err.Error(),
+				LastTransitionTime: metav1.Now(),
+			})
+			if updErr := r.patchStatus(ctx, &agent); updErr != nil {
+				return ctrl.Result{}, updErr
+			}
+			log.Info("refusing to reconcile agent with invalid LLM provider", "error", err)
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// 4.5. ConfigMap with Pi models.json for ollama-cloud agents (must exist before Deployment)
 	if !nativeRuntime(&agent) {
 		if err := r.reconcilePiModelsConfigMap(ctx, &agent, agentName); err != nil {
@@ -275,7 +299,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // resolved at runtime by Pi from the environment variable named in the provider
 // config (injected by the operator).
 func (r *AgentReconciler) reconcilePiModelsConfigMap(ctx context.Context, agent *ainselv1alpha1.Agent, agentName string) error {
-	pp := resolvePiProvider(agent)
+	pp, err := resolvePiProvider(agent)
+	if err != nil {
+		// Reconcile validates the provider before reaching this point; an
+		// error here means a caller bypassed that check. Fail the reconcile
+		// rather than writing models.json for the wrong provider.
+		return err
+	}
 	// `ainsel` is our own sibling-of-`providers` namespace at the root of
 	// models.json. Pi ignores unknown root keys; the pi-ainsel-llm-config
 	// extension reads this block to inject sampling params into each

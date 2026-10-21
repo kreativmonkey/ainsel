@@ -110,8 +110,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
+	if u.Disabled {
+		// Same generic 401 as a wrong password — never reveal that the
+		// account exists but is disabled. Logged separately for audit.
+		slog.Info("auth_login_disabled_user", "log_type", "auth_event", "username", body.Username)
+		fail()
+		return
+	}
 
-	token, exp, err := localauth.IssueToken(s.localAuthSecret, u.ID, u.Username, u.IsAdmin)
+	// Embed the current token version so a later password change/reset or
+	// sign-out-everywhere invalidates this token (issue #112). One extra PK
+	// read on the rare, already rate-limited login path.
+	tokenVersion, err := s.authzStore.UserTokenVersion(r.Context(), u.ID)
+	if err != nil {
+		slog.Error("auth_login: token version lookup failed", "username", body.Username, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	token, exp, err := localauth.IssueToken(s.localAuthSecret, u.ID, u.Username, u.IsAdmin, tokenVersion)
 	if err != nil {
 		slog.Error("auth_login: token issue failed", "username", body.Username, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -186,6 +203,36 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("auth_password_changed", "log_type", "auth_event", "sub", u.Sub)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleSignOutAll bumps the caller's token version, invalidating every
+// local session JWT issued so far — including the one authenticating this
+// request. Complements the stateless /auth/logout no-op: it is the user-facing
+// revocation switch for a suspected leaked token (issue #112).
+func (s *Server) handleSignOutAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	u, ok := oidc.FromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !strings.HasPrefix(u.Sub, authz.LocalUserIDPrefix) {
+		writeError(w, http.StatusBadRequest, "not available for this account")
+		return
+	}
+	if err := s.authzStore.BumpTokenVersion(r.Context(), u.Sub); err != nil {
+		if errors.Is(err, authz.ErrNotFound) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	slog.Info("auth_sign_out_all", "log_type", "auth_event", "sub", u.Sub)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

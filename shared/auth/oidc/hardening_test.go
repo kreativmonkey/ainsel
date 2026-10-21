@@ -145,21 +145,48 @@ func TestMiddlewareNestedRoles(t *testing.T) {
 		t.Fatalf("nested roles: want [admin], got %v", user.Roles)
 	}
 }
-func TestMiddlewareLegacyDefaultRoles(t *testing.T) {
+func TestMiddlewareDefaultRolesClaimIsGroups(t *testing.T) {
 	oidcTestEnvironment(t)
 	key := newRSAKey(t)
 	server := startJWKSServer(t, key, "test-key")
 	cfg := oidc.FromEnvironment()
 	cfg.JWKSURL = server.URL
 	claims := oidcTestClaims()
+	claims["groups"] = []string{"viewer"}
 	claims["roles"] = []string{"unrelated"}
-	claims["urn:zitadel:iam:org:project:roles"] = map[string]any{"viewer": map[string]any{}}
+	claims["urn:zitadel:iam:org:project:roles"] = map[string]any{"unrelated": map[string]any{}}
 	status, user := authenticateToken(t, cfg, signedToken(t, key, "test-key", claims))
 	if status != 200 {
 		t.Fatalf("status %d", status)
 	}
 	if !reflect.DeepEqual(user.Roles, []string{"viewer"}) {
-		t.Fatalf("legacy default: want [viewer], got %v", user.Roles)
+		t.Fatalf("default claim: want [viewer] from groups, got %v", user.Roles)
+	}
+}
+func TestMiddlewareMapRolesAreSorted(t *testing.T) {
+	oidcTestEnvironment(t)
+	key := newRSAKey(t)
+	server := startJWKSServer(t, key, "test-key")
+	cfg := oidc.FromEnvironment()
+	cfg.JWKSURL = server.URL
+	cfg.RolesClaim = zitadelRolesClaim
+	// Enough keys that Go's randomised map iteration practically never
+	// yields sorted order by accident.
+	roles := map[string]any{}
+	var want []string
+	for i := 19; i >= 0; i-- {
+		role := fmt.Sprintf("role-%02d", i)
+		roles[role] = map[string]any{}
+		want = append([]string{role}, want...)
+	}
+	claims := oidcTestClaims()
+	claims["urn:zitadel:iam:org:project:roles"] = roles
+	status, user := authenticateToken(t, cfg, signedToken(t, key, "test-key", claims))
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	if !reflect.DeepEqual(user.Roles, want) {
+		t.Fatalf("map roles: want sorted %v, got %v", want, user.Roles)
 	}
 }
 func TestMiddlewareUserInfoSubjectMismatch(t *testing.T) {

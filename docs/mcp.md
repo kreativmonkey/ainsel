@@ -136,7 +136,7 @@ Required server-side env vars (set by the Helm chart):
 | `OIDC_CLIENT_ID` | Public client ID; default audience when no audience/project ID is set |
 | `OIDC_SCOPES` | Space-separated scopes advertised to MCP clients |
 | `OIDC_SIGNING_ALGS` | Comma-separated signing algorithm allowlist; default `RS256` |
-| `OIDC_ROLES_CLAIM` | JWT role/group claim; default `urn:zitadel:iam:org:project:roles`. Exact claim key first, then dotted nested path; informational, not hub permissions |
+| `OIDC_ROLES_CLAIM` | JWT role/group claim; default `groups` (legacy Zitadel variables keep `urn:zitadel:iam:org:project:roles`). Exact claim key first, then dotted nested path; informational, not hub permissions |
 | `MCP_RESOURCE_URL` | Public MCP URL; enables RFC 9728 metadata and bearer challenge link |
 | `INTERNAL_VALIDATE_SECRET` | Shared secret with the hub for `ainsel_` token validation |
 

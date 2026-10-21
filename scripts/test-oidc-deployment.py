@@ -179,8 +179,8 @@ class DeploymentTests(unittest.TestCase):
                     ("  name: hub-backend\n" in document or "  name: ainsel-mcp\n" in document)]
 
         for settings, audience, algorithms, roles, scopes in (
-            ([], "app", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
-            (["--set", "auth.oidcSigningAlgs="], "app", "", "urn:zitadel:iam:org:project:roles", "openid profile email offline_access"),
+            ([], "app", "RS256", None, "openid profile email offline_access"),
+            (["--set", "auth.oidcSigningAlgs="], "app", "", None, "openid profile email offline_access"),
             (["--set", "auth.oidcProjectId=legacy-project"], "legacy-project", "RS256", "urn:zitadel:iam:org:project:roles", "openid profile email urn:zitadel:iam:org:project:id:legacy-project:aud"),
             (["--set", "auth.oidcProjectId=legacy-project", "--set", "auth.oidcAudience=api", "--set", r"auth.oidcSigningAlgs=RS256\,ES256", "--set", "auth.oidcRolesClaim=realm_access.roles", "--set", "auth.oidcScopes=openid email custom:audience"], "api", "RS256,ES256", "realm_access.roles", "openid email custom:audience"),
         ):
@@ -190,7 +190,10 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(len(manifests), 2)
                 for manifest in manifests:
                     for name, value in (("OIDC_AUDIENCE", audience), ("OIDC_SIGNING_ALGS", algorithms), ("OIDC_ROLES_CLAIM", roles)):
-                        self.assertIn(f'name: {name}\n              value: "{value}"', manifest)
+                        if value is None:
+                            self.assertNotIn(f"name: {name}\n", manifest)
+                        else:
+                            self.assertIn(f'name: {name}\n              value: "{value}"', manifest)
                 self.assertEqual(rendered.count(f'name: OIDC_SCOPES\n              value: "{scopes}"'), 2)
 
     def test_chart_generic_oidc_external_database(self):

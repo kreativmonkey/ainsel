@@ -27,9 +27,9 @@ reported as `UNKNOWN`, and the goal is to keep that list empty.
 | release | `:X.Y.Z`, `:vX.Y.Z`, `<float>-X.Y.Z` | `release.yml` | only by an explicit purge |
 | `:latest` | `:latest` | `release.yml` | **never** |
 
-`:dev` is what the `ainsel-dev` namespace runs; `:latest` and the semver tags are
-what users pull. Everything else exists for provenance — the record of which
-commit produced which image — and no automated consumer resolves them.
+`:dev` is what a dev install that tracks `:dev` runs; `:latest` and the semver
+tags are what users pull. Everything else exists for provenance — the record of
+which commit produced which image — and no automated consumer resolves them.
 
 ## Policy
 
@@ -153,8 +153,8 @@ table gives a Personal account **200 pulls per six hours when authenticated** an
 **100 per six hours per IPv4 address (or IPv6 /64) when not**, "subject to fair
 use".
 
-An earlier draft of this page estimated that `deploy-dev.yml`'s digest check alone
-spent "about 96 of the 100" anonymous budget every six hours. **That estimate is
+An earlier draft of this page estimated that a dev deployment polling the `:dev`
+digests alone spent "about 96 of the 100" anonymous budget every six hours. **That estimate is
 wrong, and wrong in the useful direction** - measured against the live registry on
 2026-09-23 from a single egress IP:
 
@@ -176,11 +176,12 @@ to keep honest.
 Revisit it if either of these shows up, since they are the only ways this becomes a
 problem:
 
-- `kubectl describe pod` events on `ainsel-dev` show `429` / `toomanyrequests` -
-  the shared-address case, where several agents' pods pull fresh layers at once
-  through one node's egress IP
-- `deploy-dev.yml` logs `::warning::digest lookup failed`. It fails open, so a
-  throttled registry silently stops pinning new digests instead of breaking loudly
+- `kubectl describe pod` events in your install's namespace show `429` /
+  `toomanyrequests` - the shared-address case, where several agents' pods pull
+  fresh layers at once through one node's egress IP
+- a deploy pipeline that pins `:dev` digests reports failed digest lookups. Such
+  lookups usually fail open, so a throttled registry silently stops pinning new
+  digests instead of breaking loudly
 
 The fix in both cases has the same shape: a `kubernetes.io/dockerconfigjson`
 secret in the namespace, referenced by `imagePullSecrets`, which the chart already

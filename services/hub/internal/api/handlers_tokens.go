@@ -23,6 +23,11 @@ import (
 // the same (agent, repo, issue, model, token_type) tuple, so a consumer never
 // has to know which one served it. The response names the source anyway for
 // introspectability.
+//
+// CacheReported/CostReported are per-row presence flags (issue #75): false
+// means no row/series in the group carried a reported cache/cost figure, so
+// the summed numerics are placeholders readers must render as "not reported",
+// never as a measured 0 / $0.00. A reported zero counts as reported.
 type TokenEntry struct {
 	Agent            string  `json:"agent"`
 	Repository       string  `json:"repository"`
@@ -35,12 +40,19 @@ type TokenEntry struct {
 	TotalTokens      float64 `json:"totalTokens"`
 	// CostUSD is priced consumption (pi's usage.cost, priced via
 	// spec.llm.cost) — from the conversation rows' cost_usd column on the
-	// records path, from agent_cost_usd_total on the Prometheus path. Zero
-	// for unpriced models on both.
-	CostUSD float64 `json:"costUsd"`
+	// records path, from agent_cost_usd_total on the Prometheus path. Only
+	// meaningful when CostReported is true: an unpriced model reports
+	// nothing, which is not the same fact as a run that cost nothing.
+	CostUSD       float64 `json:"costUsd"`
+	CacheReported bool    `json:"cacheReported"`
+	CostReported  bool    `json:"costReported"`
 }
 
 // TokenTotals holds aggregate token counts.
+//
+// CacheReported/CostReported are window-level presence flags (issue #75):
+// true when any row in the window reported the figure, so a totals zero
+// backed entirely by NULLs / absent series reads as "not reported".
 type TokenTotals struct {
 	InputTokens      float64 `json:"inputTokens"`
 	OutputTokens     float64 `json:"outputTokens"`
@@ -48,6 +60,8 @@ type TokenTotals struct {
 	CacheWriteTokens float64 `json:"cacheWriteTokens"`
 	TotalTokens      float64 `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
+	CacheReported    bool    `json:"cacheReported"`
+	CostReported     bool    `json:"costReported"`
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +168,8 @@ func (s *Server) listTokensFromRecords(w http.ResponseWriter, r *http.Request, q
 			CacheReadTokens:  float64(row.CacheReadTokens),
 			CacheWriteTokens: float64(row.CacheWriteTokens),
 			CostUSD:          row.CostUSD,
+			CacheReported:    row.CacheReported,
+			CostReported:     row.CostReported,
 		}
 		entry.TotalTokens = tokenTotal(entry.InputTokens, entry.OutputTokens, entry.CacheReadTokens, entry.CacheWriteTokens)
 		tokens = append(tokens, entry)
@@ -162,6 +178,8 @@ func (s *Server) listTokensFromRecords(w http.ResponseWriter, r *http.Request, q
 		totals.CacheReadTokens += entry.CacheReadTokens
 		totals.CacheWriteTokens += entry.CacheWriteTokens
 		totals.CostUSD += entry.CostUSD
+		totals.CacheReported = totals.CacheReported || entry.CacheReported
+		totals.CostReported = totals.CostReported || entry.CostReported
 	}
 	totals.TotalTokens = tokenTotal(totals.InputTokens, totals.OutputTokens, totals.CacheReadTokens, totals.CacheWriteTokens)
 
@@ -216,8 +234,9 @@ func (s *Server) listTokensFromPrometheus(w http.ResponseWriter, r *http.Request
 	}
 
 	// Cost rides the same subject labels as the token counter without the
-	// token_type dimension; agents on unpriced models raise no series and
-	// read as 0.
+	// token_type dimension. Presence of the series is the report (issue #75):
+	// agents on unpriced models raise no series and their rows read
+	// costReported false — "not reported", not a measured $0.
 	costPromql := fmt.Sprintf(
 		`sum by (agent, repo, issue_id, model) (agent_cost_usd_total%s)`,
 		filters,
@@ -262,8 +281,10 @@ func (s *Server) listTokensFromPrometheus(w http.ResponseWriter, r *http.Request
 			entry.OutputTokens += m.Value
 		case tokenTypeCacheRead:
 			entry.CacheReadTokens += m.Value
+			entry.CacheReported = true
 		case tokenTypeCacheWrite:
 			entry.CacheWriteTokens += m.Value
+			entry.CacheReported = true
 		}
 	}
 
@@ -285,6 +306,7 @@ func (s *Server) listTokensFromPrometheus(w http.ResponseWriter, r *http.Request
 			merged[key] = entry
 		}
 		entry.CostUSD += m.Value
+		entry.CostReported = true
 	}
 
 	tokens := make([]TokenEntry, 0, len(merged))
@@ -297,6 +319,8 @@ func (s *Server) listTokensFromPrometheus(w http.ResponseWriter, r *http.Request
 		totals.CacheReadTokens += entry.CacheReadTokens
 		totals.CacheWriteTokens += entry.CacheWriteTokens
 		totals.CostUSD += entry.CostUSD
+		totals.CacheReported = totals.CacheReported || entry.CacheReported
+		totals.CostReported = totals.CostReported || entry.CostReported
 	}
 	totals.TotalTokens = tokenTotal(totals.InputTokens, totals.OutputTokens, totals.CacheReadTokens, totals.CacheWriteTokens)
 

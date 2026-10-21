@@ -177,4 +177,66 @@ describe('UserList', () => {
       "Clears cached data; name updates on the user's next login",
     )
   })
+
+  const disabledUser = {
+    id: '333',
+    username: 'carol',
+    email: 'carol@example.com',
+    isAdmin: false,
+    disabled: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }
+
+  function stubUsers(users: unknown[]) {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('/users/admin-user') && !url.includes('/sync')) {
+        return Promise.resolve(new Response(JSON.stringify(currentUser), { status: 200 }))
+      }
+      if (url.includes('/users') && init?.method !== 'PATCH' && !url.includes('/sync')) {
+        return Promise.resolve(new Response(JSON.stringify(users), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify(users[0]), { status: 200 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('renders a disabled badge and dims the row for a disabled user', async () => {
+    stubUsers([currentUser, disabledUser])
+    renderWithProviders(<UserList />, { route: '/admin/users' })
+    await waitFor(() => expect(screen.getByText('carol@example.com')).toBeInTheDocument())
+
+    const badge = screen.getByText('disabled')
+    expect(badge).toBeInTheDocument()
+    const row = badge.closest('tr')
+    expect(row?.className).toContain('row-disabled')
+  })
+
+  it('toggles a user via PATCH /users/{id} with the disabled flag', async () => {
+    const fetchMock = stubUsers([currentUser, { ...disabledUser, disabled: false }])
+    renderWithProviders(<UserList />, { route: '/admin/users' })
+    await waitFor(() => expect(screen.getByText('carol@example.com')).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('button', { name: /disable carol/i }))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => url.includes('/users/333') && init?.method === 'PATCH',
+      )
+      expect(call).toBeDefined()
+      expect(JSON.parse(String(call![1]!.body))).toEqual({ disabled: true })
+    })
+  })
+
+  it('suppresses the disable toggle on the current user\u2019s own row', async () => {
+    stubUsers([currentUser, disabledUser])
+    renderWithProviders(<UserList />, { route: '/admin/users' })
+    await waitFor(() => expect(screen.getByText('carol@example.com')).toBeInTheDocument())
+
+    const ownToggle = screen.getByRole('button', { name: /disable admin/i })
+    expect(ownToggle).toBeDisabled()
+    const otherToggle = screen.getByRole('button', { name: /enable carol/i })
+    expect(otherToggle).toBeEnabled()
+  })
 })

@@ -71,6 +71,33 @@ Look for migration error messages near the top of the log output.
 
 **Always back up Postgres before upgrading.** If a migration produces unexpected results, the only safe recovery path is to restore from the backup taken before the upgrade.
 
+### Migration history integrity
+
+Besides `schema_migrations`, the hub keeps a `schema_history` table with one row per applied migration version and a checksum of the migration file as it was when it was applied. On every startup it compares those rows against the migrations shipped in the image.
+
+This exists because `schema_migrations` stores only the *highest* applied version. A deployment that has been taken to version 27 cannot tell that the file behind version 26 was replaced — `Up()` sees nothing to do and reports success, while the schema keeps a hole. Queries against the missing column then fail on every request, with a hub pod that started clean.
+
+If the recorded checksum for an applied version differs from the file shipping now, the hub refuses to start:
+
+```
+migration history drift: applied version 26 does not match migration file 26 (recorded 3f2a1c9d…, file 8b41e0aa…). Migrations must never be renumbered or edited once deployed…
+```
+
+Recover by making the database and the history agree on what is actually applied:
+
+1. Check what the schema really has, against the named migration file:
+   ```bash
+   kubectl -n <namespace> exec statefulset/postgres -- \
+     psql -U <user> -d <db> -c '\d <table>'
+   ```
+2. Bring the schema in line with the code — apply the DDL the skipped migration would have run (an `ADD COLUMN` that is missing), or undo an extra change.
+3. Tell the history to re-record that version, then restart the hub. The row is re-derived from the shipping file on the next startup:
+   ```sql
+   DELETE FROM schema_history WHERE version = 26;
+   ```
+
+A database migrated before `schema_history` existed is not drift: on its first startup with this check, every version already recorded in `schema_migrations` is trusted and written as the baseline. Rolling back to an older image is likewise allowed — recorded versions with no file are the shape of a rollback, and these migrations are additive.
+
 ## Migrating triggers from CRD storage
 
 If your installation still stores triggers as `Trigger` / `CronTrigger`

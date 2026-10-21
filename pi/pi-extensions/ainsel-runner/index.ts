@@ -18,9 +18,11 @@
  *           owns retries.
  *
  * Required env (operator already sets all of these):
- *   HUB_URL, AGENT_NAME, HUB_INTERNAL_VALIDATE_SECRET, OLLAMA_CLOUD_MODEL,
+ *   HUB_URL, AGENT_NAME, HUB_INTERNAL_VALIDATE_SECRET, AINSEL_LLM_MODEL,
  *   AINSEL_TASK_ID (the task this container exists to run; the runner exits
  *   if it is missing — a pod without a task is a misconfiguration).
+ *   AINSEL_LLM_MODEL may also arrive under its legacy alias
+ *   OLLAMA_CLOUD_MODEL (accepted for one release, issue #96).
  *
  * Optional env:
  *   NAK_DELAY_MS           default 60000 — NACK backoff (ms) before retry
@@ -54,6 +56,7 @@ let reviewReader: Awaited<ReturnType<typeof createRepositoryReader>> | undefined
 const REDACTION_DENYLIST = new Set([
 	"AGENT_NAME",
 	"PI_PROVIDER",
+	"AINSEL_LLM_MODEL",
 	"OLLAMA_CLOUD_MODEL",
 	"AGENT_PERSONA_PATH",
 	"HUB_URL",
@@ -241,9 +244,10 @@ const tokenCounter = new prom.Counter({
 
 // The USD counterpart of agent_tokens_used_total, raised from pi's
 // usage.cost.total — which pi computes from the model's cost block in the
-// generated models.json (spec.llm.cost, issue #281). An agent whose model
-// carries no cost block reports cost 0 and raises nothing; the hub reads the
-// missing series as $0, the same figure pi itself shows.
+// generated models.json (spec.llm.cost, issue #281). Presence is meaningful
+// (issue #75): an agent whose model carries no cost block reports no figure
+// and raises nothing — "not reported" — while a priced model that costs
+// nothing raises 0, a measured free run. The hub reads the two apart.
 const costCounter = new prom.Counter({
 	name: "agent_cost_usd_total",
 	help: "Total USD cost incurred by the agent, from pi's usage.cost.total",
@@ -257,9 +261,14 @@ const costCounter = new prom.Counter({
  *  series — publishing only input + output under-reports what the model
  *  processed by the whole cached volume, which dominates an agent loop.
  *
- *  Components that are absent, non-numeric or zero are dropped: providers
- *  without prompt caching never report cacheRead/cacheWrite, and skipping them
- *  keeps two dead series per label combination out of Prometheus.
+ *  A component is published whenever pi reports it as a finite non-negative
+ *  number — including 0 — and dropped only when it is absent, negative or
+ *  non-numeric (issue #75). A reported `cached_tokens: 0` is a measured zero hit rate and must
+ *  reach Prometheus as a 0-valued series; dropping it would collapse "the
+ *  provider says zero" into "the provider says nothing", which is the bug
+ *  this guards against. The cost is two zero-valued series per label
+ *  combination for un-caching providers — the accepted price of keeping the
+ *  distinction.
  *
  *  Pure and exported for unit testing. */
 export function tokenComponents(usage: any): Array<[string, number]> {
@@ -270,16 +279,28 @@ export function tokenComponents(usage: any): Array<[string, number]> {
 		["cache_write", usage?.cacheWrite],
 	];
 	return candidates.filter(
-		([, value]) => typeof value === "number" && Number.isFinite(value) && value > 0,
+		([, value]) => typeof value === "number" && Number.isFinite(value) && value >= 0,
 	);
 }
 
-/** Extracts the USD cost of a pi usage object (usage.cost.total), or 0 when
- *  it is absent, non-numeric or non-positive — the shape an unpriced model
- *  reports. Pure and exported for unit testing. */
-export function costOf(usage: any): number {
+/** Extracts the USD cost of a pi usage object (usage.cost.total), or
+ *  undefined when it is absent, negative or non-numeric — the shape an
+ *  unpriced model reports (issue #75). A reported 0 is returned as 0: it is a
+ *  measured free run, not a missing figure. Pure and exported for unit
+ *  testing. */
+export function costOf(usage: any): number | undefined {
 	const value = usage?.cost?.total;
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Returns the value when it is a finite non-negative number, undefined
+ *  otherwise — the ingest-side twin of tokenComponents' filter: a reported 0
+ *  stays 0, an absent or negative figure stays absent instead of being
+ *  flattened into a measured zero (issue #75). Dropping negatives matters for
+ *  the presence flags: a garbage negative would otherwise be stored and flip
+ *  COUNT(col) > 0 to "reported". Pure and exported for unit testing. */
+export function finiteNumberOrUndefined(value: any): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** Whether a pi usage object carries anything worth booking: at least one
@@ -292,7 +313,11 @@ export function costOf(usage: any): number {
  *  a role check drops real consumption (issue #76). Pure and exported for
  *  unit testing. */
 export function hasRecordableUsage(usage: any): boolean {
-	return tokenComponents(usage).length > 0 || costOf(usage) > 0;
+	// some(v > 0), not length > 0: tokenComponents keeps reported zeros (issue
+	// #75), so length alone would call an all-zero report recordable. costOf
+	// may be undefined (unpriced model) — a reported 0 is still not worth a
+	// booking on its own; it rides along once any positive token books the row.
+	return tokenComponents(usage).some(([, value]) => value > 0) || (costOf(usage) ?? 0) > 0;
 }
 
 /** Book one pi LLM call against the Prometheus counters.
@@ -320,7 +345,10 @@ export function recordUsage(usage: any, model: string, source = "message"): bool
 		);
 	}
 	const cost = costOf(usage);
-	if (cost > 0) {
+	// Raise the counter whenever pi reports a figure — including 0, which
+	// creates the series without moving its value and is exactly the "measured
+	// free run" signal the hub distinguishes from "never reported" (issue #75).
+	if (cost !== undefined) {
 		costCounter.inc({ agent, repo, org, event_type: eventType, model: modelLabel }, cost);
 	}
 	logInfo("token usage recorded", {
@@ -359,9 +387,19 @@ export async function counterValue(name: string, labels: Record<string, string>)
  *
  *  Compaction and branch-summary entries store `usage` but no model — pi
  *  summarises with the model the run is configured for, so the operator's
- *  OLLAMA_CLOUD_MODEL is the same one that produced the tokens. */
-function sessionModel(): string {
-	return process.env.OLLAMA_CLOUD_MODEL ?? "";
+ *  AINSEL_LLM_MODEL is the same one that produced the tokens. The legacy
+ *  OLLAMA_CLOUD_MODEL name is read as a fallback for one release (issue #96)
+ *  so a new runtime still works against an operator that only writes the
+ *  old name. */
+export function sessionModel(): string {
+	return resolveModelEnv();
+}
+
+/** Resolve the configured LLM model from the environment: the canonical
+ *  provider-neutral AINSEL_LLM_MODEL wins; the legacy OLLAMA_CLOUD_MODEL
+ *  alias is accepted while the dual-write window is open (issue #96). */
+export function resolveModelEnv(env: NodeJS.ProcessEnv = process.env): string {
+	return env.AINSEL_LLM_MODEL?.trim() || env.OLLAMA_CLOUD_MODEL?.trim() || "";
 }
 
 /** Build the transcript row for a compaction or branch-summary completion.
@@ -532,6 +570,13 @@ export function extractEventContext(event: HubEvent): EventContext {
 // prompt-cache traffic; totalTokens is the sum of all four) so hub-side
 // totals match the agent_tokens_used_total counter series and the by-event
 // view stops under-counting cached prompts (issue #281).
+//
+// cacheReadTokens/cacheWriteTokens/costUsd are optional and omitted when pi
+// reports no figure (issue #75): the hub stores an omitted field as NULL —
+// "not reported" — while a sent 0 is stored as a measured zero. They must
+// never be defaulted to 0 on rows that carry no usage at all (user and
+// toolResult rows): a window of such rows would otherwise read as reported
+// zeros and flip the hub's presence flags to a lie.
 export interface ConversationPayload {
 	agentName: string;
 	invocationId: string;
@@ -541,12 +586,13 @@ export interface ConversationPayload {
 	model: string;
 	inputTokens: number;
 	outputTokens: number;
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
 	// costUsd mirrors pi's usage.cost.total for the message, priced from the
 	// model's cost block in models.json (spec.llm.cost). The hub sums it into
-	// the by-event and summary cost figures (issue #281).
-	costUsd: number;
+	// the by-event and summary cost figures (issue #281) and uses its presence
+	// to tell an unpriced model from a free run (issue #75).
+	costUsd?: number;
 	stopReason: string;
 	// Subject labels the token tables group by (issue #410): the same
 	// normalised values the agent_tokens_used_total counter carries, sent to
@@ -593,9 +639,10 @@ export function toConversationPayloads(messages: any[], meta: SerializeMeta): Co
 		model: "",
 		inputTokens: 0,
 		outputTokens: 0,
-		cacheReadTokens: 0,
-		cacheWriteTokens: 0,
-		costUsd: 0,
+		// cacheReadTokens/cacheWriteTokens/costUsd are deliberately absent
+		// here: only assistant rows carry usage, and defaulting them to 0 on
+		// every row would make the hub's COUNT(...)-based presence flags read
+		// "reported" for rows that never had a figure (issue #75).
 		stopReason: "",
 	};
 	for (const m of messages ?? []) {
@@ -612,6 +659,12 @@ export function toConversationPayloads(messages: any[], meta: SerializeMeta): Co
 					if (c.type === "toolCall") return { type: "toolCall", id: c.id, name: c.name, arguments: c.arguments };
 					return { type: c.type };
 				});
+				// Reported zeros stay 0; absent figures are omitted entirely — the
+				// key is left off the object, so the hub stores NULL, "not
+				// reported" (issue #75).
+				const cacheRead = finiteNumberOrUndefined(m.usage?.cacheRead);
+				const cacheWrite = finiteNumberOrUndefined(m.usage?.cacheWrite);
+				const costUsd = finiteNumberOrUndefined(m.usage?.cost?.total);
 				out.push({
 					...base,
 					role: "assistant",
@@ -619,9 +672,44 @@ export function toConversationPayloads(messages: any[], meta: SerializeMeta): Co
 					model: m.model ?? "",
 					inputTokens: m.usage?.input ?? 0,
 					outputTokens: m.usage?.output ?? 0,
-					cacheReadTokens: m.usage?.cacheRead ?? 0,
-					cacheWriteTokens: m.usage?.cacheWrite ?? 0,
-					costUsd: m.usage?.cost?.total ?? 0,
+					...(cacheRead !== undefined && { cacheReadTokens: cacheRead }),
+					...(cacheWrite !== undefined && { cacheWriteTokens: cacheWrite }),
+					...(costUsd !== undefined && { costUsd }),
+					stopReason: m.stopReason ?? "",
+				});
+			} else if (m.role === "system") {
+				// Synthetic rows for LLM calls pi never emits as messages: the
+				// compaction and branch-summary completions (see
+				// summaryConversationMessage). Their usage is the whole point of
+				// the row, so a system message without any — pi's own prompt-
+				// section patches arrive this way — stays out of the transcript.
+				if (!hasRecordableUsage(m.usage)) continue;
+				const blocks = toBlockArray(m.content).map((c: any) =>
+					c.type === "text" ? { type: "text", text: c.text } : { type: c.type },
+				);
+				let serialized = redactSecrets(JSON.stringify(blocks));
+				// Same safety net as toolResult rows: a summary is bounded in
+				// practice, but a pathological one must not produce an unbounded row.
+				const systemCap = Math.max(128_000, 8 * resolveToolResultMaxChars());
+				if (serialized.length > systemCap) {
+					serialized = truncateWithMarker(serialized, systemCap);
+				}
+				// Same presence semantics as assistant rows (issue #75): a
+				// reported 0 stays 0, an absent figure is omitted so the hub
+				// stores NULL — "not reported".
+				const sysCacheRead = finiteNumberOrUndefined(m.usage?.cacheRead);
+				const sysCacheWrite = finiteNumberOrUndefined(m.usage?.cacheWrite);
+				const sysCostUsd = finiteNumberOrUndefined(m.usage?.cost?.total);
+				out.push({
+					...base,
+					role: "system",
+					content: serialized,
+					model: m.model ?? "",
+					inputTokens: m.usage?.input ?? 0,
+					outputTokens: m.usage?.output ?? 0,
+					...(sysCacheRead !== undefined && { cacheReadTokens: sysCacheRead }),
+					...(sysCacheWrite !== undefined && { cacheWriteTokens: sysCacheWrite }),
+					...(sysCostUsd !== undefined && { costUsd: sysCostUsd }),
 					stopReason: m.stopReason ?? "",
 				});
 			} else if (m.role === "system") {
@@ -699,6 +787,18 @@ function required(name: string): string {
 	if (!v) {
 		logError(`${name} is required; ainsel-runner cannot start`);
 		throw new Error(`${name} is required`);
+	}
+	return v;
+}
+
+/** Like required(), but for the model contract: resolves AINSEL_LLM_MODEL
+ *  with the legacy OLLAMA_CLOUD_MODEL alias (issue #96) and fails loudly
+ *  when neither is set — there is no default model. */
+function requiredModel(): string {
+	const v = resolveModelEnv();
+	if (!v) {
+		logError("AINSEL_LLM_MODEL is required; ainsel-runner cannot start");
+		throw new Error("AINSEL_LLM_MODEL is required");
 	}
 	return v;
 }
@@ -1669,7 +1769,7 @@ export default function ainselRunnerExtension(pi: ExtensionAPI) {
 			agentName = required("AGENT_NAME");
 			hubUrl = required("HUB_URL");
 			token = resolveInternalToken();
-			model = required("OLLAMA_CLOUD_MODEL");
+			model = requiredModel();
 		} catch {
 			return;
 		}

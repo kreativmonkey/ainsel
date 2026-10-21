@@ -43,6 +43,14 @@ const TOKEN_KEY = 'ainsel.local.token'
 const USER_KEY = 'ainsel.local.user'
 const EXPIRES_KEY = 'ainsel.local.expiresAt'
 
+// Marker for which method the user last authenticated through in
+// 'oidc+local' mode (issue #114). Exactly one method is "active" per
+// browser so the API client always carries exactly one token; the marker is
+// a preference, not truth — an expired or absent session on the marked side
+// falls back to the other.
+const METHOD_KEY = 'ainsel.activeMethod'
+type AuthMethod = 'local' | 'oidc'
+
 function clearStoredSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
@@ -68,15 +76,16 @@ function loadStoredSession(): { token: string | null; user: AuthUser | null } {
   }
 }
 
-function LocalAuthProvider({ children }: { children: ReactNode }) {
+// useLocalSession owns the local-session storage shared by the 'local' mode
+// provider and the 'oidc+local' composite provider. The token is mirrored
+// into the API client during render (not in an effect) so the first fetch
+// wave after login already carries it — same reasoning as the OIDC
+// TokenSync in OidcBridge.
+function useLocalSession() {
   const [session, setSession] = useState(loadStoredSession)
-
-  // Mirror the token into the API client during render (not in an effect) so
-  // the first fetch wave after login already carries it — same reasoning as
-  // the OIDC TokenSync below.
   setAuthToken(session.token)
 
-  const login = useCallback(async (username: string, password: string) => {
+  const loginLocal = useCallback(async (username: string, password: string) => {
     const res = await apiLogin(username, password)
     localStorage.setItem(TOKEN_KEY, res.token)
     localStorage.setItem(USER_KEY, JSON.stringify(res.user))
@@ -84,10 +93,18 @@ function LocalAuthProvider({ children }: { children: ReactNode }) {
     setSession({ token: res.token, user: res.user })
   }, [])
 
-  const logout = useCallback(() => {
+  const logoutLocal = useCallback(() => {
     clearStoredSession()
     setSession({ token: null, user: null })
   }, [])
+
+  return { session, setSession, loginLocal, logoutLocal }
+}
+
+function LocalAuthProvider({ children }: { children: ReactNode }) {
+  const { session, loginLocal, logoutLocal } = useLocalSession()
+  const login = loginLocal
+  const logout = logoutLocal
 
   const state: AuthState = useMemo(
     () => ({
@@ -180,7 +197,7 @@ function OidcBridge({ children }: { children: ReactNode }) {
   // one, silent renewal would have to run through a hidden iframe against
   // the IdP — which cannot work in this deployment (the IdP session cookie
   // is SameSite=Lax and the app and IdP live on separate sites, e.g.
-  // devoper.duckdns.org vs auth-devoper.duckdns.org), so we go straight to
+  // app.example.com vs auth.example.com), so we go straight to
   // an interactive signinRedirect instead of waiting for the iframe to
   // time out.
   setUnauthorizedHandler(() => {
@@ -234,6 +251,118 @@ function OidcBridge({ children }: { children: ReactNode }) {
   return <AuthCtx.Provider value={state}>{children}</AuthCtx.Provider>
 }
 
+// OidcLocalBridge adapts the OIDC state plus the local-session state to the
+// unified AuthState for 'oidc+local' coexistence mode (issue #114). It runs
+// inside the react-oidc-context provider, so the redirect/callback/silent-
+// renew machinery is exactly the one 'oidc' mode uses — nothing forked.
+//
+// Exactly one method is active per browser, tracked by the ainsel.activeMethod
+// marker set at login time. The marker is a preference: if the marked side
+// has no live session, the other side is used when it has one. This keeps
+// setAuthToken fed with exactly one token — two live identities in one
+// browser would produce confusing /auth/me results and mixed-origin calls.
+function OidcLocalBridge({ children }: { children: ReactNode }) {
+  const oidc = useOidcAuth()
+  const { session, loginLocal, logoutLocal } = useLocalSession()
+
+  // Same expired-user rule as OidcBridge: an expired stored user still
+  // exposes its dead access token and must count as unauthenticated.
+  const oidcToken = oidc.user && !oidc.user.expired ? oidc.user.access_token : null
+  const oidcUser: AuthUser | null = oidc.user?.profile
+    ? {
+        sub: String(oidc.user.profile.sub ?? ''),
+        username: (oidc.user.profile.preferred_username as string | undefined) ?? '',
+        email: (oidc.user.profile.email as string | undefined) ?? '',
+      }
+    : null
+
+  const marker = localStorage.getItem(METHOD_KEY)
+  const localActive =
+    marker !== 'oidc' ? Boolean(session.token) : Boolean(session.token) && !oidcToken
+  const activeMethod: AuthMethod = localActive ? 'local' : 'oidc'
+
+  const token = localActive ? session.token : oidcToken
+  const user = localActive ? session.user : oidcUser
+
+  // Mirror the active token during render so children's first fetch wave
+  // carries it (see useLocalSession / OidcBridge for the rationale).
+  setAuthToken(token)
+
+  // Local session cleared means "no local session is active" — drop the
+  // marker so the OIDC side can take over instead of a stale preference.
+  const clearLocal = useCallback(() => {
+    logoutLocal()
+    localStorage.removeItem(METHOD_KEY)
+  }, [logoutLocal])
+
+  const login = useCallback(
+    async (username: string, password: string) => {
+      await loginLocal(username, password)
+      localStorage.setItem(METHOD_KEY, 'local')
+    },
+    [loginLocal],
+  )
+
+  const logout = useCallback(() => {
+    // Clear both namespaces: a "logged out" user must not silently reappear
+    // from the other store.
+    clearLocal()
+    // Only drive the IdP signout when an OIDC session exists; without one
+    // signoutRedirect would navigate to the IdP for a user who never used it.
+    if (oidc.user) void oidc.signoutRedirect()
+  }, [clearLocal, oidc])
+
+  const signinRedirect = useCallback(() => {
+    localStorage.setItem(METHOD_KEY, 'oidc')
+    void oidc.signinRedirect()
+  }, [oidc])
+
+  // 401 recovery follows the source of the token that was attached: a 401
+  // on a local token must never bounce the user to the external IdP, and a
+  // 401 on an OIDC token must not clear a healthy local session.
+  setUnauthorizedHandler(() => {
+    if (activeMethod === 'local') {
+      // RequireAuth routes to /login afterwards (client-side <Navigate>).
+      // No page reload, so no loop is possible.
+      clearLocal()
+      return
+    }
+    if (oidc.activeNavigator || oidc.isLoading) return // recovery already in flight
+    void (async () => {
+      if (oidc.user?.refresh_token) {
+        try {
+          await oidc.signinSilent()
+          return // token renewed; the mirror above picks it up on re-render
+        } catch {
+          // fall through to an interactive login
+        }
+      }
+      void oidc.signinRedirect().catch(() => {
+        // The IdP is unreachable — land on /login so the user gets the
+        // chooser page as a manual retry instead of a blank page.
+        window.location.href = `${import.meta.env.BASE_URL}login`
+      })
+    })()
+  })
+
+  const state: AuthState = useMemo(
+    () => ({
+      mode: 'oidc+local',
+      ready: !oidc.isLoading,
+      token,
+      user,
+      isAdmin: Boolean(session.user?.isAdmin) && activeMethod === 'local',
+      login,
+      logout,
+      signinRedirect,
+      signoutRedirect: logout,
+    }),
+    [oidc, token, user, session, activeMethod, login, logout, signinRedirect],
+  )
+
+  return <AuthCtx.Provider value={state}>{children}</AuthCtx.Provider>
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   // Read config at render time, not module-load time, so tests can seed
   // window.__AINSEL_CONFIG__ before mounting the provider.
@@ -243,6 +372,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (
       <OidcProvider {...oidcProviderConfig(cfg)}>
         <OidcBridge>{children}</OidcBridge>
+      </OidcProvider>
+    )
+  }
+  if (cfg.authMode === 'oidc+local') {
+    return (
+      <OidcProvider {...oidcProviderConfig(cfg)}>
+        <OidcLocalBridge>{children}</OidcLocalBridge>
       </OidcProvider>
     )
   }

@@ -178,11 +178,32 @@ func stringifyEqual(v any, target string) bool {
 	return stringify(v) == target
 }
 
-// resolveField walks a dotted field path into a nested map.
+// resolveField walks a dotted field path into a nested map. When the path
+// meets an array before its last segment, the rest of the path is resolved
+// against every element and the results are collected into one array, so
+// "issue.labels.name" yields the names of all labels. Elements that lack the
+// rest of the path are skipped; an empty array resolves to an empty array.
 func resolveField(m map[string]any, field string) (any, bool) {
-	parts := strings.Split(field, ".")
-	var current any = m
-	for _, part := range parts {
+	return resolvePath(m, strings.Split(field, "."))
+}
+
+func resolvePath(current any, parts []string) (any, bool) {
+	for i, part := range parts {
+		if arr, isArray := current.([]any); isArray {
+			collected := []any{}
+			for _, item := range arr {
+				v, ok := resolvePath(item, parts[i:])
+				if !ok {
+					continue
+				}
+				if nested, isNested := v.([]any); isNested {
+					collected = append(collected, nested...)
+				} else {
+					collected = append(collected, v)
+				}
+			}
+			return collected, true
+		}
 		obj, ok := current.(map[string]any)
 		if !ok {
 			return nil, false

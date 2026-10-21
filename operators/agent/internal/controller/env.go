@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,23 +36,59 @@ type piProviderConfig struct {
 	ThinkingLevelMap string
 }
 
+// piLLMProviderAllowedValues lists the accepted spec.llm.provider values, in
+// the order they should appear in error messages. It mirrors the CRD enum on
+// AgentLLM.Provider; keep the two in sync.
+var piLLMProviderAllowedValues = []string{
+	ainselv1alpha1.AgentLLMProviderOllamaCloud,
+	ainselv1alpha1.AgentLLMProviderOpenCode,
+	ainselv1alpha1.AgentLLMProviderAlibabaCloud,
+	ainselv1alpha1.AgentLLMProviderCustom,
+	ainselv1alpha1.AgentLLMProviderOpenAICodex,
+}
+
 // resolvePiProvider returns the Pi CLI provider configuration for the
-// agent's LLM provider. When no hardcoded provider is configured, the controller
-// checks for a custom provider (spec.customProvider) and uses it if present;
-// otherwise defaults to ollama-cloud for backwards compatibility.
-func resolvePiProvider(agent *ainselv1alpha1.Agent) piProviderConfig {
+// agent's LLM provider. The provider must be set explicitly on the Agent:
+// there is deliberately no fallback to a built-in provider. An unset or
+// unknown provider is an error, not a default — silently landing on
+// ollama-cloud would send the agent's API key and prompt traffic to a
+// third-party SaaS the user never chose (issue #96). The CRD enum rejects
+// unknown non-empty values at the API server; this check also covers Agents
+// stored before the enum landed, and the empty value.
+//
+// Each built-in provider's base URL may be overridden per agent via the
+// provider block's baseUrl field (e.g. a different Alibaba MaaS region);
+// custom providers keep taking their URL from spec.customProvider.url.
+func resolvePiProvider(agent *ainselv1alpha1.Agent) (piProviderConfig, error) {
 	switch agent.Spec.LLM.Provider {
-	case "openai-codex":
-		return piProviderConfig{Name: "openai-codex"}
+	case ainselv1alpha1.AgentLLMProviderOpenAICodex:
+		if !piSubscription(agent) || agent.Spec.Runtime.Subscription == nil {
+			return piProviderConfig{}, fmt.Errorf("openai-codex requires a Pi subscription")
+		}
+		return piProviderConfig{Name: "openai-codex"}, nil
+	case ainselv1alpha1.AgentLLMProviderOllamaCloud:
+		cfg := piProviderConfig{
+			Name:      "ollama-api-key",
+			BaseURL:   "https://ollama.com/v1",
+			APIKeyEnv: "OLLAMA_API_KEY", // #nosec G101 -- env var name, not a hardcoded value
+		}
+		if agent.Spec.OllamaCloud != nil && agent.Spec.OllamaCloud.BaseURL != "" {
+			cfg.BaseURL = agent.Spec.OllamaCloud.BaseURL
+		}
+		return cfg, nil
 	case ainselv1alpha1.AgentLLMProviderOpenCode:
-		return piProviderConfig{
+		cfg := piProviderConfig{
 			Name:      "opencode",
 			BaseURL:   "https://opencode.ai/zen/go/v1",
 			APIKeyEnv: "OPENCODE_API_KEY", // #nosec G101 -- env var name, not a hardcoded value
 			Compat:    `,"compat":{"requiresReasoningContentOnAssistantMessages":true}`,
 		}
+		if agent.Spec.OpenCode != nil && agent.Spec.OpenCode.BaseURL != "" {
+			cfg.BaseURL = agent.Spec.OpenCode.BaseURL
+		}
+		return cfg, nil
 	case ainselv1alpha1.AgentLLMProviderAlibabaCloud:
-		return piProviderConfig{
+		cfg := piProviderConfig{
 			Name:             "alibaba-cloud",
 			BaseURL:          "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
 			APIKeyEnv:        "ALIBABA_CLOUD_API_KEY", // #nosec G101 -- env var name, not a hardcoded value
@@ -59,6 +96,10 @@ func resolvePiProvider(agent *ainselv1alpha1.Agent) piProviderConfig {
 			ModelCompat:      `"compat":{"thinkingFormat":"qwen"}`,
 			ThinkingLevelMap: `"thinkingLevelMap":{"off":null,"minimal":null,"low":null,"medium":"medium","high":"high","xhigh":null}`,
 		}
+		if agent.Spec.AlibabaCloud != nil && agent.Spec.AlibabaCloud.BaseURL != "" {
+			cfg.BaseURL = agent.Spec.AlibabaCloud.BaseURL
+		}
+		return cfg, nil
 	case ainselv1alpha1.AgentLLMProviderCustom:
 		// Use "openai" as the provider key so Pi CLI recognizes it.
 		// The custom baseUrl is injected via models.json.
@@ -70,14 +111,13 @@ func resolvePiProvider(agent *ainselv1alpha1.Agent) piProviderConfig {
 		if agent.Spec.CustomProvider != nil {
 			cfg.BaseURL = agent.Spec.CustomProvider.URL
 		}
-		return cfg
+		return cfg, nil
+	case "":
+		return piProviderConfig{}, fmt.Errorf(
+			"spec.llm.provider is required: set it to one of %s", strings.Join(piLLMProviderAllowedValues, ", "))
 	default:
-		// ollama-cloud (default)
-		return piProviderConfig{
-			Name:      "ollama-api-key",
-			BaseURL:   "https://ollama.com/v1",
-			APIKeyEnv: "OLLAMA_API_KEY", // #nosec G101 -- env var name, not a hardcoded value
-		}
+		return piProviderConfig{}, fmt.Errorf(
+			"spec.llm.provider %q is unknown: must be one of %s", agent.Spec.LLM.Provider, strings.Join(piLLMProviderAllowedValues, ", "))
 	}
 }
 

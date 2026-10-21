@@ -13,7 +13,7 @@ This page is a 5-minute orientation. For the full technical reference, see the [
 A connector wraps webhook deliveries (from Forgejo or GitHub, or any
 HMAC-signed source) into a pass-through event envelope — no normalization.
 The hub matches events against triggers and routes them to agents via the
-event queue. In the bundled forge setup, agents act on the forge —
+event queue. In the standard forge setup, agents act on the forge —
 commenting, opening PRs, pushing code. Agents, connector gateways, and
 runtime images are Kubernetes CRDs managed by a single Helm chart; triggers,
 cron triggers, personas, skills, MCP servers, and the channel registry live

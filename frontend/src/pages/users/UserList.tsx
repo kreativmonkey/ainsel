@@ -60,6 +60,10 @@ export function UserList() {
     update.mutate({ id: user.id, body: { isAdmin: !user.isAdmin } })
   }
 
+  const toggleDisabled = (user: HubUser) => {
+    update.mutate({ id: user.id, body: { disabled: !user.disabled } })
+  }
+
   const submitCreate = (e: FormEvent) => {
     e.preventDefault()
     create.mutate(
@@ -93,6 +97,15 @@ export function UserList() {
         ) : (
           <>
             <b>{userDisplayName(u)}</b>{' '}
+            {u.disabled && (
+              <span
+                className="label"
+                title="This user is disabled and cannot log in or use the API"
+                style={{ fontSize: '0.7em', color: 'var(--signal)' }}
+              >
+                disabled
+              </span>
+            )}{' '}
             {isLocalUser(u) && (
               <span
                 className="label"
@@ -151,7 +164,9 @@ export function UserList() {
                       {isSyncing ? '…' : 'Sync'}
                     </Button>
                     {syncMe.isError && (
-                      <span style={{ color: 'var(--signal)', fontSize: '0.75em', display: 'block' }}>
+                      <span
+                        style={{ color: 'var(--signal)', fontSize: '0.75em', display: 'block' }}
+                      >
                         Failed
                       </span>
                     )}
@@ -188,7 +203,7 @@ export function UserList() {
           {
             key: 'actions',
             header: '',
-            width: 190,
+            width: 280,
             align: 'center' as const,
             cell: (u: HubUser) => {
               const isSelf = currentUser != null && u.id === currentUser.id
@@ -207,6 +222,22 @@ export function UserList() {
                       Reset password
                     </Button>
                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={isSelf}
+                    title={
+                      isSelf
+                        ? 'You cannot disable your own account'
+                        : u.disabled
+                          ? 'Re-enable this account'
+                          : 'Block login and API access; memberships and tokens are kept'
+                    }
+                    onClick={() => toggleDisabled(u)}
+                    aria-label={`${u.disabled ? 'Enable' : 'Disable'} ${userDisplayName(u)}`}
+                  >
+                    {u.disabled ? 'Enable' : 'Disable'}
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -320,6 +351,7 @@ export function UserList() {
               rows={data}
               columns={columns}
               rowKey={(u) => u.id}
+              rowClassName={(u) => (u.disabled ? 'row-disabled' : undefined)}
               emptyLabel="No users found."
             />
           ) : null}

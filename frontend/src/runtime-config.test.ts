@@ -14,3 +14,24 @@ describe('runtimeConfig OIDC', () => {
     expect(runtimeConfig).toThrow('oidcIssuer and oidcClientId')
   })
 })
+
+describe('runtimeConfig oidc+local', () => {
+  it('accepts explicit oidc+local with a complete OIDC config', () => {
+    window.__AINSEL_CONFIG__ = {
+      authMode: 'oidc+local',
+      oidcIssuer: 'https://idp.test/app/',
+      oidcClientId: 'client',
+    }
+    expect(runtimeConfig().authMode).toBe('oidc+local')
+  })
+
+  it('rejects oidc+local without issuer/client ID (the SSO half must work)', () => {
+    window.__AINSEL_CONFIG__ = { authMode: 'oidc+local', oidcIssuer: '', oidcClientId: '' }
+    expect(runtimeConfig).toThrow('oidc+local')
+  })
+
+  it('is never derived from an empty config', () => {
+    window.__AINSEL_CONFIG__ = { oidcIssuer: '', oidcClientId: '', oidcProjectId: '' }
+    expect(runtimeConfig().authMode).toBe('none')
+  })
+})

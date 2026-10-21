@@ -157,6 +157,7 @@ ui:
 | _(empty)_ | OIDC if `oidcIssuer` is set, otherwise no-auth (only auto-enabled when nothing is exposed via ingress) | derived | upgrading existing installs |
 | `oidc`  | external OIDC provider     | IdP redirect flow     | organization SSO |
 | `local` | hub-managed username/password accounts | login form | exposed installs without an IdP |
+| `oidc+local` | OIDC **and** local accounts, chained: local session JWTs are verified by the hub, everything else by the IdP | login chooser (SSO button + username/password form) | gradual SSO migration, or a break-glass local admin next to SSO |
 | `none`  | no auth middleware         | "no auth" indicator   | port-forward or behind an edge auth proxy (Authelia/Authentik/oauth2-proxy) |
 
 Without any configuration the hub backend **refuses to start** unless it
@@ -221,9 +222,10 @@ or `oidcScopes` overrides the corresponding default.
 service environment variables. Existing `ZITADEL_ISSUER` / `OIDC_PROJECT_ID`
 remain aliases, with the neutral variables taking precedence.
 
-JWT roles default to the legacy `urn:zitadel:iam:org:project:roles` claim.
-Use `auth.oidcRolesClaim` for another claim, such as `groups` or the nested
-path `realm_access.roles`. An exact claim key takes precedence over dotted
+JWT roles default to the top-level `groups` claim, or to the legacy
+`urn:zitadel:iam:org:project:roles` claim when `auth.oidcProjectId` is set.
+Use `auth.oidcRolesClaim` for another claim, such as the nested path
+`realm_access.roles`. An exact claim key takes precedence over dotted
 path traversal, so namespaced keys containing dots remain usable. Role
 arrays contain strings; role objects use their keys as role names. Roles
 are informational.
@@ -280,6 +282,34 @@ existing Secrets instead. Further users are managed via the UI
 (**Admin → Users**) or the `/api/v1/users` API; every user can change their
 own password under Profile. See `chart/values-local.yaml` for a full
 example.
+
+### OIDC + local coexistence
+
+```yaml
+auth:
+  mode: oidc+local
+  oidcIssuer: "https://your-oidc-provider.example.com"
+  oidcClientId: "ainsel"
+  local:
+    adminUser: admin   # optional, defaults to admin
+```
+
+Both halves are required: the OIDC settings exactly as for `mode: oidc`,
+plus the local admin/JWT Secrets as for `mode: local` (auto-generated when
+not supplied). The login page offers the SSO button and the
+username/password form side by side; a local session JWT is verified by the
+hub and never reaches the IdP middleware, and a failed local token is
+rejected as a local failure — it never surfaces as a confusing OIDC error.
+Local users carry the `local:` subject prefix, so the two identity
+namespaces are disjoint and each user sees only what the authz grants give
+them.
+
+Note that this mode **bootstraps the local admin** (chart-generated
+password) and permanently exposes `/api/v1/auth/login` next to SSO — that
+is the break-glass path. Delete the admin account via **Admin → Users** if
+you want SSO-only identities despite the coexistence mode. MCP does not
+accept local session JWTs by design; local users reach it via user tokens
+(`/api/v1/user-tokens`) as in `local` mode.
 
 ### No auth (local or proxied installs)
 
@@ -338,6 +368,51 @@ curl -H "Authorization: Bearer $TOKEN" https://your-domain.com/ainsel/api/v1/age
 kubectl run curl-test -n ainsel --rm -it --image=curlimages/curl --restart=Never -- \
   curl -s http://hub-backend:8080/health
 ```
+
+## Ingress controllers
+
+The chart's ingress templates render differently depending on the
+`className` set on `hub.ingress`, `ui.ingress`, and `mcp.ingress`:
+
+- **ingress-nginx** (`className: nginx`, the default): paths are rendered as
+  nginx regexes with `nginx.ingress.kubernetes.io/use-regex` and
+  `rewrite-target` annotations, which map the external paths onto the paths
+  the services serve internally (this is the behaviour the chart was
+  originally written for).
+- **Any other class** (Traefik, HAProxy, a cloud LB controller, …): paths are
+  rendered as literal paths — `pathType: Prefix` for the hub, frontend, and
+  MCP ingresses, `Exact` for the MCP OAuth `.well-known` ingresses — and
+  **all** `nginx.ingress.kubernetes.io/*` annotations are dropped, including
+  any you set in `*.ingress.annotations`, because other controllers cannot
+  interpret them.
+
+Because the nginx rewrite annotations are not rendered on other
+controllers, you must configure path rewriting in your own controller so
+the services receive the paths they serve (example paths for Traefik
+`ReplacePathRegex` / `StripPrefix` middleware, HAProxy rewrite rules, etc.):
+
+| Ingress | Published path | Path the service expects |
+|---|---|---|
+| `hub-backend` | `<hub.ingress.path>/v1/*` (default `/ainsel/api/v1/*`) | `/api/v1/*` |
+| `hub-frontend` | `<ui.ingress.path>` with any trailing nginx capture groups stripped (default `/ainsel`) | the frontend serves under `ui.basePath` |
+| `ainsel-mcp` | `<mcp.ingress.path>` (default `/ainsel/mcp`) | `/mcp` |
+| `ainsel-mcp-oauth-metadata` | `/.well-known/oauth-authorization-server<mcp.ingress.path>` | `/.well-known/oauth-authorization-server` |
+| `ainsel-mcp-oauth-protected-resource` | `/.well-known/oauth-protected-resource<mcp.ingress.path>` | `/.well-known/oauth-protected-resource` |
+
+> **Security:** the hub-backend ingress must publish only
+> `<hub.ingress.path>/v1/*`. The hub also serves `/api/internal/*` on the
+> same port, authenticated solely by the cluster-wide `X-Internal-Token`
+> secret — those routes must never be reachable from outside the cluster.
+> On ingress-nginx this isolation is enforced by the regex capture group;
+> on other controllers it is enforced by the literal `Prefix` path. Do not
+> add rewrite or catch-all rules that widen it back to the path root.
+
+WebhookConnector ingresses are created by the event-gateway operator with
+literal `Exact` paths and are controller-agnostic already.
+
+The rendering is covered by golden-file tests:
+`python3 scripts/test-chart-ingress.py` (regenerate with `--update` after
+intentional template changes).
 
 ## ArgoCD Deployment
 

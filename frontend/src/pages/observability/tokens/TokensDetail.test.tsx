@@ -136,6 +136,37 @@ describe('TokensDetail', () => {
     expect(screen.getAllByText('$1.25').length).toBeGreaterThanOrEqual(2)
   })
 
+  it('renders "not reported" for rows whose cache and cost were never measured', async () => {
+    // Issue #75: the hub flags rows where no conversation ever reported a
+    // cache or cost figure. The summed zeros there are placeholders and must
+    // not render as measured 0 / $0.00 — in the row cells and in the Cost KPI.
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/tokens/by-subject')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          range: '24h',
+          rows: [{
+            agent: 'silent-bot', repo: 'r', model: 'm',
+            inputTokens: 1000, outputTokens: 500,
+            cacheReadTokens: 0, cacheWriteTokens: 0,
+            totalTokens: 1500, costUsd: 0,
+            cacheReported: false, costReported: false,
+          }],
+        }), { status: 200 }))
+      }
+      if (url.includes('/tokens/summary')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          totalTokens: 1500, inputTokens: 1000, outputTokens: 500, costUsd: 0,
+        }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('{}', { status: 200 }))
+    }))
+    renderWithProviders(<TokensDetail />, { route: '/observability/tokens' })
+    await waitFor(() => expect(screen.getByText('silent-bot')).toBeInTheDocument())
+    // Two cache cells, the row's cost cell, and the Cost KPI all say so.
+    expect(screen.getAllByText('not reported').length).toBeGreaterThanOrEqual(4)
+    expect(screen.queryByText('$0.00')).not.toBeInTheDocument()
+  })
+
   it('labels the table with the backend that answered', async () => {
     // Records-first since #411: the default answer comes from the hub's own
     // conversation rows, and the panel says so.

@@ -1,4 +1,6 @@
 {{- if .Values.hub.ingress.enabled }}
+{{- $isNginx := eq (include "ainsel.isNginx" .Values.hub.ingress.className) "true" -}}
+{{- $annotations := fromYaml (include "ainsel.ingressAnnotations" (dict "isNginx" $isNginx "nginxOnly" (dict "nginx.ingress.kubernetes.io/use-regex" "true") "extra" .Values.hub.ingress.annotations)) -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,21 +9,21 @@ metadata:
   labels:
     {{- include "ainsel.labels" . | nindent 4 }}
     app.kubernetes.io/component: hub-backend
+  {{- with $annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    {{- with .Values.hub.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.hub.ingress.className }}
   tls:
     - hosts:
         - {{ .Values.hub.ingress.host }}
-      secretName: hub-tls
+      secretName: {{ .Values.hub.ingress.tlsSecretName | default "hub-tls" }}
   rules:
     - host: {{ .Values.hub.ingress.host }}
       http:
         paths:
+          {{- if $isNginx }}
           # Only /api/v1/* is published. The capture group is deliberately
           # restricted to `v1(/.*)?` rather than `.*` so that the hub's
           # /api/internal/* routes (agent task ack/nack, event ingest,
@@ -43,4 +45,23 @@ spec:
                 name: hub-backend
                 port:
                   name: http
+          {{- else }}
+          # Controller-agnostic variant: literal Prefix path, no nginx regex
+          # or rewrite annotations. It preserves the same security property:
+          # only <path>/v1/* is published, so the hub's /api/internal/*
+          # routes (authenticated by the cluster-wide X-Internal-Token)
+          # stay unreachable from outside the cluster. Do not widen this
+          # path beyond <path>/v1.
+          #
+          # The hub serves its routes under /api/... — configure your
+          # controller's rewrite middleware to map <path>/v1/* to
+          # /api/v1/* (see "Ingress controllers" in docs/deployment.md).
+          - path: {{ .Values.hub.ingress.path }}/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-backend
+                port:
+                  name: http
+          {{- end }}
 {{- end }}

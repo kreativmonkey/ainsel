@@ -11,6 +11,7 @@ import type { TokensSubjectRow, Range } from '../../../api/observability'
 import { Titleblock } from '../../../layout/Titleblock'
 import { Panel } from '../../../primitives/Panel'
 import { RegisterTable, type Column } from '../../../primitives/RegisterTable'
+import { NotReported } from '../../../primitives/NotReported'
 import { Tag } from '../../../primitives/Tag'
 import { SectionStatus } from '../../../primitives/SectionStatus'
 import { RangeSelector } from '../RangeSelector'
@@ -42,7 +43,12 @@ export function TokensDetail() {
     const cacheRead = rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0)
     const cacheWrite = rows.reduce((s, r) => s + (r.cacheWriteTokens ?? 0), 0)
     const costUsd = rows.reduce((s, r) => s + (r.costUsd ?? 0), 0)
-    return { input, output, cacheRead, cacheWrite, costUsd }
+    // Window-level presence for the cost tile (issue #75): reported when any
+    // row reports; when no row carries the flag the hub predates it, so the
+    // state is unknown and the legacy rendering stays.
+    const anyCostFlag = rows.some((r) => r.costReported !== undefined)
+    const costReported = rows.some((r) => r.costReported === true)
+    return { input, output, cacheRead, cacheWrite, costUsd, costNotReported: anyCostFlag && !costReported }
   }, [rows])
 
   const columns: readonly Column<TokensSubjectRow>[] = [
@@ -79,20 +85,31 @@ export function TokensDetail() {
     },
     // Cache traffic is the bulk of an agent loop's prompt (pi's usage.input
     // excludes it) and is priced differently from input. Without these
-    // columns the visible ones do not sum to the displayed Total.
+    // columns the visible ones do not sum to the displayed Total. A row whose
+    // cache was never reported renders "not reported", not 0 (issue #75).
     {
       key: 'cacheRead',
       header: 'Cache R',
       width: 90,
       align: 'right',
-      cell: (r) => <span className="num">{abbreviateNumber(r.cacheReadTokens ?? 0)}</span>,
+      cell: (r) =>
+        r.cacheReported === false ? (
+          <NotReported />
+        ) : (
+          <span className="num">{abbreviateNumber(r.cacheReadTokens ?? 0)}</span>
+        ),
     },
     {
       key: 'cacheWrite',
       header: 'Cache W',
       width: 90,
       align: 'right',
-      cell: (r) => <span className="num">{abbreviateNumber(r.cacheWriteTokens ?? 0)}</span>,
+      cell: (r) =>
+        r.cacheReported === false ? (
+          <NotReported />
+        ) : (
+          <span className="num">{abbreviateNumber(r.cacheWriteTokens ?? 0)}</span>
+        ),
     },
     {
       key: 'ratio',
@@ -118,7 +135,13 @@ export function TokensDetail() {
       header: 'Cost',
       width: 90,
       align: 'right',
-      cell: (r) => <span className="num">{formatUSD(r.costUsd ?? 0)}</span>,
+      // An unpriced model reports nothing — "not reported", not $0.00 (issue #75).
+      cell: (r) =>
+        r.costReported === false ? (
+          <NotReported />
+        ) : (
+          <span className="num">{formatUSD(r.costUsd ?? 0)}</span>
+        ),
     },
     {
       key: 'events',
@@ -175,7 +198,9 @@ export function TokensDetail() {
             <div className="hd">
               <span className="label">Cost · {range}</span>
             </div>
-            <div className="figure num">{formatUSD(totals.costUsd)}</div>
+            <div className="figure num">
+              {totals.costNotReported ? <NotReported /> : formatUSD(totals.costUsd)}
+            </div>
           </div>
         </div>
 

@@ -81,14 +81,6 @@ spec:
             - name: OIDC_PROJECT_ID
               value: {{ .Values.auth.oidcProjectId | quote }}
             {{- end }}
-            {{- if .Values.forgejo.apiBase }}
-            - name: FORGEJO_API_BASE
-              value: {{ .Values.forgejo.apiBase | quote }}
-            {{- end }}
-            {{- if .Values.forgejo.repo }}
-            - name: FORGEJO_REPO
-              value: {{ .Values.forgejo.repo | quote }}
-            {{- end }}
             {{- with .Values.ui.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -25,10 +25,11 @@ results — a review comment, an issue label, a reply, a light switched on
   console chat work out of the box. Anything else that can POST a signed
   JSON webhook is configuration-only; sources that don't speak webhooks
   are one small connector away.
-- **Any capability.** An agent is a persona plus skills plus tools.
-  Built-in tools cover shell, git, and forge operations; register any
-  MCP server and the agent gains that domain's tools — chat platforms,
-  home automation, browsers, your own APIs.
+- **Any capability.** An agent is a persona plus skills plus tools. The
+  shipped runtime gives agents shell and git access out of the box; forge
+  operations — and every other domain — arrive as tool binaries on your
+  agent image or through any MCP server you register (chat platforms,
+  home automation, browsers, your own APIs).
 - **Real ops.** Agents, connectors, and runtime images are Kubernetes
   CRDs deployed by a single Helm chart: queued tasks with retries,
   queue-based autoscaling down to zero, group-based access control,
@@ -47,9 +48,9 @@ event ──▶ trigger (filters) ──▶ agent (persona · skills · tools ·
 
 | You want | Event in | Agent reacts via | Status |
 |---|---|---|---|
-| PR reviews with file-level comments | forge webhook | forge tools | **bundled** |
-| Issue triage, labeling, comment Q&A | forge webhook | forge tools | **bundled** |
-| Issue → implementation → PR | forge webhook + label | git, shell, forge tools | **bundled** |
+| PR reviews with file-level comments | forge webhook | forge tools | **config only** |
+| Issue triage, labeling, comment Q&A | forge webhook | forge tools | **config only** |
+| Issue → implementation → PR | forge webhook + label | git, shell, forge tools | **config only** |
 | Nightly digests, stale-issue sweeps, health checks | cron trigger | any tools / MCP | **bundled** |
 | Ad-hoc conversation with an agent | console chat | its tools | **bundled** |
 | Home automation, IoT, CI alerts | signed JSON webhook (Node-RED, scripts, SaaS) | that domain's MCP server | **config only** |
@@ -57,16 +58,20 @@ event ──▶ trigger (filters) ──▶ agent (persona · skills · tools ·
 | Polled API, proprietary event bus | your connector service | whatever you register | **write a connector** |
 
 - **bundled** — works with what ships in this repo.
-- **config only** — no AInsel code: register a generic `WebhookConnector`
+- **config only** — no AInsel code: register the generic `WebhookConnector`
   (paste its endpoint into the source; deliveries are HMAC-SHA256 signed,
-  header name configurable), attach the domain's MCP server to an agent,
-  filter on any path in the payload.
+  header name configurable, filter on any path in the payload), and give an
+  agent its capabilities — the forge tools that power the forge rows above
+  come from the `AgentImage` you register (tool binaries or an attached MCP
+  server), not from the shipped runtime image. Cron triggers and console
+  chat are **bundled**: their code ships in this repo and they work once
+  configured.
 - **write a connector** — sources that don't speak plain webhooks need a
   small translator service. Agents, triggers, and personas stay the same;
   see [writing your own connector](#writing-your-own-connector) and the
   [connector tutorial](docs/writing-a-connector.md).
 
-The bundled forge flow covers the full loop today: review newly opened
+A configured forge setup covers the full loop today: review newly opened
 PRs with file-level feedback, classify and label incoming issues, answer
 mentions in issue and PR comments, and pick up a labeled issue, branch,
 implement the change, and open the PR back for review.

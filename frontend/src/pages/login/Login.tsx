@@ -6,9 +6,11 @@ import { Field } from '../../primitives/Field'
 import { Input } from '../../primitives/Input'
 
 // Login renders per auth mode:
-//   - local: username/password form against /api/v1/auth/login,
-//   - oidc:  redirect button to the external IdP (legacy flow),
-//   - none:  straight through to the dashboard.
+//   - local:      username/password form against /api/v1/auth/login,
+//   - oidc+local: chooser — SSO button and username/password form side by
+//                 side on one page (issue #114), no auto-redirect to the IdP,
+//   - oidc:       redirect button to the external IdP (legacy flow),
+//   - none:       straight through to the dashboard.
 export function Login() {
   const auth = useAuth()
   const [searchParams] = useSearchParams()
@@ -45,59 +47,88 @@ export function Login() {
 
   const displayError = error ?? paramError
 
+  const ssoButton = (label: string) => (
+    <Button
+      type="button"
+      variant="primary"
+      onClick={() => auth.signinRedirect()}
+      style={{ marginTop: 24 }}
+    >
+      {label}
+    </Button>
+  )
+
+  const localForm = (
+    <form onSubmit={submitLocal} style={{ marginTop: 24, display: 'grid', gap: 16 }}>
+      <Field label="Username" htmlFor="login-username">
+        <Input
+          id="login-username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoComplete="username"
+          autoFocus
+          required
+        />
+      </Field>
+      <Field label="Password" htmlFor="login-password">
+        <Input
+          id="login-password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
+          required
+        />
+      </Field>
+      <Button type="submit" variant="primary" disabled={busy}>
+        {busy ? 'Signing in…' : 'Sign in'}
+      </Button>
+    </form>
+  )
+
+  const errorLine = displayError && (
+    <p style={{ color: 'var(--signal, #b00)', marginTop: 16 }} role="alert">
+      Sign-in failed: {displayError}
+    </p>
+  )
+
   return (
     <div style={{ padding: 32, maxWidth: 480, margin: '0 auto' }}>
       <h1>AInsel</h1>
-      {auth.mode === 'local' ? (
+      {auth.mode === 'oidc+local' ? (
+        <>
+          <p>Sign in with your account or via single sign-on.</p>
+          {errorLine}
+          {ssoButton('Continue with single sign-on')}
+          <div
+            role="separator"
+            aria-label="or"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              margin: '24px 0 0',
+              color: 'var(--ink)',
+              opacity: 0.65,
+            }}
+          >
+            <span style={{ flex: 1, borderTop: '1px solid currentColor' }} />
+            or
+            <span style={{ flex: 1, borderTop: '1px solid currentColor' }} />
+          </div>
+          {localForm}
+        </>
+      ) : auth.mode === 'local' ? (
         <>
           <p>Sign in with your local AInsel account.</p>
-          {displayError && (
-            <p style={{ color: 'var(--signal, #b00)', marginTop: 16 }} role="alert">
-              Sign-in failed: {displayError}
-            </p>
-          )}
-          <form onSubmit={submitLocal} style={{ marginTop: 24, display: 'grid', gap: 16 }}>
-            <Field label="Username" htmlFor="login-username">
-              <Input
-                id="login-username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-                autoFocus
-                required
-              />
-            </Field>
-            <Field label="Password" htmlFor="login-password">
-              <Input
-                id="login-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
-            </Field>
-            <Button type="submit" variant="primary" disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign in'}
-            </Button>
-          </form>
+          {errorLine}
+          {localForm}
         </>
       ) : (
         <>
           <p>Sign in with your AInsel account.</p>
-          {displayError && (
-            <p style={{ color: 'var(--signal, #b00)', marginTop: 16 }}>
-              Sign-in failed: {displayError}
-            </p>
-          )}
-          <Button
-            type="button"
-            variant="primary"
-            onClick={() => auth.signinRedirect()}
-            style={{ marginTop: 24 }}
-          >
-            Continue to login
-          </Button>
+          {errorLine}
+          {ssoButton('Continue to login')}
         </>
       )}
     </div>

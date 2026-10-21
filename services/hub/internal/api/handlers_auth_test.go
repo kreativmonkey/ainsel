@@ -32,6 +32,7 @@ func localAuthTestServer(t *testing.T) (*Server, *fakeAuthzStore) {
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/v1/auth/password", s.handleChangePassword)
+	s.mux.HandleFunc("/api/v1/auth/sign-out-all", s.handleSignOutAll)
 	s.mux.HandleFunc("/api/v1/users", s.handleUsers)
 	s.mux.HandleFunc("/api/v1/users/", s.handleUser)
 	s.mux.Handle("/api/v1/auth/me", oidc.MeHandler())
@@ -400,7 +401,7 @@ func TestIssuedTokenAuthenticates(t *testing.T) {
 	seedAdmin(t, store)
 	// Wire the real local middleware chain onto the server.
 	s.SetAuthMiddleware(func(next http.Handler) http.Handler {
-		return localauth.NewMiddleware(testLocalSecret)(s.IdentityPersistMiddleware(next))
+		return localauth.NewMiddleware(testLocalSecret, store)(s.IdentityPersistMiddleware(next))
 	})
 
 	rec := doJSON(t, s, http.MethodPost, "/api/v1/auth/login", map[string]string{
@@ -443,5 +444,176 @@ func TestIssuedTokenAuthenticates(t *testing.T) {
 	s.ServeHTTP(rec3, req)
 	if rec3.Code != http.StatusUnauthorized {
 		t.Fatalf("garbage token: status = %d, want 401", rec3.Code)
+	}
+}
+
+// --- token versioning: password change/reset invalidates issued tokens (#112) ---
+
+// localMWServer returns a server with the real local middleware chain wired,
+// so requests authenticate via Bearer tokens exactly as in production.
+func localMWServer(t *testing.T) (*Server, *fakeAuthzStore) {
+	t.Helper()
+	s, store := localAuthTestServer(t)
+	s.SetAuthMiddleware(func(next http.Handler) http.Handler {
+		return localauth.NewMiddleware(testLocalSecret, store)(s.IdentityPersistMiddleware(next))
+	})
+	return s, store
+}
+
+func loginToken(t *testing.T, s *Server, username, password string) string {
+	t.Helper()
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/auth/login", map[string]string{
+		"username": username, "password": password,
+	}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login(%s): status = %d, body %s", username, rec.Code, rec.Body.String())
+	}
+	var login struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	return login.Token
+}
+
+func getWithToken(t *testing.T, s *Server, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPasswordChangeInvalidatesIssuedTokens(t *testing.T) {
+	s, store := localMWServer(t)
+	seedAdmin(t, store)
+
+	oldToken := loginToken(t, s, "admin", "admin-password")
+	if rec := getWithToken(t, s, oldToken); rec.Code != http.StatusOK {
+		t.Fatalf("old token before change: status = %d, want 200", rec.Code)
+	}
+
+	// Own password change authenticates with the old token.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/password", bytes.NewBufferString(
+		`{"current":"admin-password","new":"new-password-123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password change: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Previously issued token is dead immediately.
+	if rec := getWithToken(t, s, oldToken); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token after change: status = %d, want 401", rec.Code)
+	}
+	// Fresh login with the new password works.
+	fresh := loginToken(t, s, "admin", "new-password-123")
+	if rec := getWithToken(t, s, fresh); rec.Code != http.StatusOK {
+		t.Fatalf("fresh token: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestAdminResetInvalidatesIssuedTokens(t *testing.T) {
+	s, store := localMWServer(t)
+	seedAdmin(t, store)
+	hash, _ := localauth.HashPassword("bob-password")
+	if _, err := store.CreateLocalUser(context.Background(), "local:bob", "", "bob", hash, false); err != nil {
+		t.Fatal(err)
+	}
+
+	bobToken := loginToken(t, s, "bob", "bob-password")
+	if rec := getWithToken(t, s, bobToken); rec.Code != http.StatusOK {
+		t.Fatalf("bob token before reset: status = %d, want 200", rec.Code)
+	}
+
+	// Admin resets bob's password (admin token authenticates the PATCH).
+	adminToken := loginToken(t, s, "admin", "admin-password")
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/local:bob", bytes.NewBufferString(
+		`{"password":"reset-password-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin reset: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Bob's session dies immediately; the admin's own session is unaffected.
+	if rec := getWithToken(t, s, bobToken); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bob token after reset: status = %d, want 401", rec.Code)
+	}
+	if rec := getWithToken(t, s, adminToken); rec.Code != http.StatusOK {
+		t.Fatalf("admin token after resetting bob: status = %d, want 200", rec.Code)
+	}
+	// Bob can log in again with the new password.
+	fresh := loginToken(t, s, "bob", "reset-password-1")
+	if rec := getWithToken(t, s, fresh); rec.Code != http.StatusOK {
+		t.Fatalf("bob fresh token: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestSignOutAllInvalidatesTokens(t *testing.T) {
+	s, store := localMWServer(t)
+	seedAdmin(t, store)
+
+	tokenA := loginToken(t, s, "admin", "admin-password")
+	tokenB := loginToken(t, s, "admin", "admin-password")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/sign-out-all", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenA)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign-out-all: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Every session dies, including the one that called it.
+	if rec := getWithToken(t, s, tokenA); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tokenA after sign-out-all: status = %d, want 401", rec.Code)
+	}
+	if rec := getWithToken(t, s, tokenB); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tokenB after sign-out-all: status = %d, want 401", rec.Code)
+	}
+	// Re-login works.
+	if fresh := loginToken(t, s, "admin", "admin-password"); getWithToken(t, s, fresh).Code != http.StatusOK {
+		t.Fatal("login after sign-out-all must work")
+	}
+}
+
+func TestSignOutAllRejectsNonLocal(t *testing.T) {
+	s, store := localAuthTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/auth/sign-out-all", nil, asUser("oidc-sub-123", "ext"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-local sign-out-all: status = %d, want 400", rec.Code)
+	}
+	_ = store
+}
+
+// A failed password change (wrong current password) must NOT bump the
+// version — otherwise brute-forcing the change endpoint could lock users
+// out of their own sessions.
+func TestFailedPasswordChangeDoesNotBumpVersion(t *testing.T) {
+	s, store := localMWServer(t)
+	seedAdmin(t, store)
+
+	token := loginToken(t, s, "admin", "admin-password")
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/password", bytes.NewBufferString(
+		`{"current":"wrong-password","new":"attacker-password"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong-current: status = %d, want 401", rec.Code)
+	}
+	if v := store.tokenVersions["local:admin"]; v != 0 {
+		t.Fatalf("token version after failed change = %d, want 0", v)
+	}
+	if rec := getWithToken(t, s, token); rec.Code != http.StatusOK {
+		t.Fatalf("session must survive a failed change attempt, got %d", rec.Code)
 	}
 }

@@ -30,7 +30,6 @@ go test -cover ./...
 | File | Purpose |
 |------|---------|
 | `event.go` | Canonical `Event` struct, direct-source (`cron`, `chat`) constants |
-| `event_data.go` | Typed data payloads (`IssueData`, `PullRequestData`, etc.) |
 | `filter.go` | `Filter` struct, `Match`, `MatchFilters`, `MatchEventType` |
 | `filter_deepcopy.go` | DeepCopy methods for CRD compatibility |
 | `api/v1alpha1/` | CRD types (`Agent`, `AgentImage`, `WebhookConnector`) |
@@ -39,10 +38,10 @@ go test -cover ./...
 
 ## Adding a New Event Type
 
-1. Add the data payload struct to `event_data.go` if needed (event types
-   themselves are strings stamped into the event's `type` header by the
-   connector — there is no central registry)
-2. Document the type in [`docs/event-schema.md`](../../../docs/event-schema.md)
+1. Event types are strings stamped into the event's `type` header by the
+   connector — there is no central registry, and event `data` is carried as
+   raw JSON (`RawJSON`), so no Go type is needed for a new payload shape
+2. Document the payload shape in [`docs/event-schema.md`](../../../docs/event-schema.md)
 3. Add tests in `event_test.go`
 
 ## Adding a New Filter Operator

@@ -1,0 +1,119 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ainsel-mcp
+  namespace: ainsel
+  labels:
+    app.kubernetes.io/name: ainsel-mcp
+    app.kubernetes.io/component: mcp
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: mcp.example.com
+      http:
+        paths:
+          - path: /ainsel/mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: ainsel-mcp
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ainsel-mcp-oauth-metadata
+  namespace: ainsel
+  labels:
+    app.kubernetes.io/name: ainsel-mcp
+    app.kubernetes.io/component: mcp
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: mcp.example.com
+      http:
+        paths:
+          - path: /.well-known/oauth-authorization-server/ainsel/mcp
+            pathType: Exact
+            backend:
+              service:
+                name: ainsel-mcp
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ainsel-mcp-oauth-protected-resource
+  namespace: ainsel
+  labels:
+    app.kubernetes.io/name: ainsel-mcp
+    app.kubernetes.io/component: mcp
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: mcp.example.com
+      http:
+        paths:
+          - path: /.well-known/oauth-protected-resource/ainsel/mcp
+            pathType: Exact
+            backend:
+              service:
+                name: ainsel-mcp
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hub-backend
+  namespace: ainsel
+  labels:
+    app.kubernetes.io/part-of: ainsel
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: hub-backend
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - ainsel.example.com
+      secretName: hub-tls
+  rules:
+    - host: ainsel.example.com
+      http:
+        paths:
+          - path: /ainsel/api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-backend
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hub-frontend
+  namespace: ainsel
+  labels:
+    app.kubernetes.io/part-of: ainsel
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: hub-frontend
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - ainsel.example.com
+      secretName: ui-tls
+  rules:
+    - host: ainsel.example.com
+      http:
+        paths:
+          - path: /ainsel
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-frontend
+                port:
+                  name: http

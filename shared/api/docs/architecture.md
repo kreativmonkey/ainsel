@@ -9,7 +9,7 @@ The `ainsel-api-shared` module is the shared foundation for all Ainsel platform 
 ```mermaid
 graph TD
     subgraph ainsel-api-shared
-        ES[Event Schema<br/>event.go, event_data.go]
+        ES[Event Schema<br/>event.go]
         FE[Filter Engine<br/>filter.go]
     end
 
@@ -51,25 +51,6 @@ classDiagram
 
     Event --> EventSubject
     Event --> EventActor
-
-    class IssueData {
-        +IssuePayload Issue
-    }
-
-    class PullRequestData {
-        +PullRequestPayload PullRequest
-    }
-
-    class PushData {
-        +string Ref
-        +string Before
-        +string After
-        +[]CommitPayload Commits
-    }
-
-    Event ..> IssueData : Data field
-    Event ..> PullRequestData : Data field
-    Event ..> PushData : Data field
 ```
 
 ## Filter Engine

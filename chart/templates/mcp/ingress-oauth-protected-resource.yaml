@@ -8,6 +8,11 @@
 # The main MCP ingress only covers {path}/* so a separate ingress with a
 # fixed rewrite is needed. Without this, the MCP client's OAuth discovery
 # hits a redirect and fails with "Failed to parse JSON".
+#
+# On non-nginx controllers the rewrite-target annotation is not rendered
+# (the controller cannot interpret it): configure rewrite middleware to map
+# this literal path to /.well-known/oauth-protected-resource on the MCP
+# service (see "Ingress controllers" in docs/deployment.md).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -16,11 +21,12 @@ metadata:
   labels:
     app.kubernetes.io/name: ainsel-mcp
     app.kubernetes.io/component: mcp
+  {{- $isNginx := eq (include "ainsel.isNginx" .Values.mcp.ingress.className) "true" -}}
+  {{- $annotations := fromYaml (include "ainsel.ingressAnnotations" (dict "isNginx" $isNginx "nginxOnly" (dict "nginx.ingress.kubernetes.io/rewrite-target" "/.well-known/oauth-protected-resource") "extra" .Values.mcp.ingress.annotations)) -}}
+  {{- with $annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /.well-known/oauth-protected-resource
-    {{- with .Values.mcp.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.mcp.ingress.className }}
   rules:

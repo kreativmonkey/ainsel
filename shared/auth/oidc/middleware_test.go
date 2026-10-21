@@ -62,12 +62,16 @@ func signedToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapCl
 	return s
 }
 
+// zitadelRolesClaim is the role-object claim the fixtures below assert roles in.
+const zitadelRolesClaim = "urn:zitadel:iam:org:project:roles"
+
 func newMiddleware(t *testing.T, jwksURL, issuer, audience string) func(http.Handler) http.Handler {
 	t.Helper()
 	mw, err := oidc.NewMiddleware(oidc.Config{
-		Issuer:   issuer,
-		Audience: audience,
-		JWKSURL:  jwksURL,
+		Issuer:     issuer,
+		Audience:   audience,
+		JWKSURL:    jwksURL,
+		RolesClaim: zitadelRolesClaim,
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)
@@ -642,6 +646,7 @@ func TestMiddleware_UserInfo_EnrichesUser(t *testing.T) {
 		Audience:    "ainsel-hub",
 		JWKSURL:     jwks.URL,
 		UserInfoURL: userinfoSrv.URL,
+		RolesClaim:  zitadelRolesClaim,
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)
@@ -706,6 +711,7 @@ func TestMiddleware_UserInfo_UsesCache(t *testing.T) {
 		Audience:    "ainsel-hub",
 		JWKSURL:     jwks.URL,
 		UserInfoURL: userinfoSrv.URL,
+		RolesClaim:  zitadelRolesClaim,
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)
@@ -764,6 +770,7 @@ func TestMiddleware_UserInfo_FallbackOnFailure(t *testing.T) {
 		Audience:    "ainsel-hub",
 		JWKSURL:     jwks.URL,
 		UserInfoURL: userinfoSrv.URL,
+		RolesClaim:  zitadelRolesClaim,
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)
@@ -826,6 +833,7 @@ func TestMiddleware_UserInfo_PreservesJWTClaims(t *testing.T) {
 		Audience:    "ainsel-hub",
 		JWKSURL:     jwks.URL,
 		UserInfoURL: userinfoSrv.URL,
+		RolesClaim:  zitadelRolesClaim,
 	})
 	if err != nil {
 		t.Fatalf("NewMiddleware: %v", err)

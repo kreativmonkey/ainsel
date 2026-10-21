@@ -129,7 +129,8 @@ state as the operators reconcile it.*
    `kubectl get webhookconnectors -n ainsel` shows `Ready=True`.
 
 3. **Define an agent.** Create an `Agent` CRD with a `displayName`,
-   `runtime.provider`, `llm.model`, `imageRef`, a `persona` (inline or
+   `llm.provider` (required — one of `ollama-cloud`, `opencode`,
+   `alibaba-cloud`, `custom`), `llm.model`, `imageRef`, a `persona` (inline or
    ConfigMap), and an `enabledTools` list. The agent operator
    reconciles a Deployment (replica count from `spec.scaling`) and a
    per-agent metrics Service.
@@ -628,8 +629,10 @@ The runner reports that per-message cost with its conversation rows and
 raises `agent_cost_usd_total{agent,repo,org,event_type,model}` for
 Prometheus. The hub sums both into the token summary tile, the by-subject
 and by-event tables, the conversation ledger and the `get_token_usage` MCP
-tool. Without `spec.llm.cost` pi prices everything at zero, and every cost
-figure stays exactly `$0.00`.
+tool. Without `spec.llm.cost` there is no cost figure to report: the runner
+omits the field (the hub stores NULL and raises no counter series), and the
+console renders cost as "not reported" — a different fact from a priced
+model whose runs happen to cost `$0.00` (issue #75).
 
 ```yaml
 spec:
@@ -648,6 +651,15 @@ cache-read / cache-write / input): a cost derived from an input+output total
 alone would be wrong in both directions at once. Changing `spec.llm.cost`
 regenerates `models.json`, which restarts the agent's pods so the new rates
 apply to the next turn.
+
+The "not reported" semantics above are a runner–hub contract, so upgrade the
+two together: migration 0025 NULLs the ambiguous stored zeros, but a runner
+older than this change still sends an explicit `0` for every figure it did not
+measure, so its rows land as measured zeros again the moment they arrive.
+Redeploy the agents (new runner image) alongside the upgraded hub. Note also
+that the 0025 *down* migration restores the `NOT NULL DEFAULT 0` constraint by
+collapsing every NULL back to `0` — rolling the migration back is lossy for
+presence by design.
 
 ![The Token Detail page: all-time total and 24-hour input/output tiles above
 a by-agent table breaking usage down per repo/event, agent and model, with

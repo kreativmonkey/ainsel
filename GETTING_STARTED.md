@@ -89,6 +89,8 @@ The operator reconciles the connector and starts a webhook-receiver deployment t
 
 An `AgentImage` defines the container image and tool configuration for an agent runtime. An `Agent` references an image and adds the LLM configuration and persona.
 
+> **Note — tools are not implicit.** The shipped `ainsel-pi` runtime image gives agents shell and git access, but installs no forge tools: the tool-discovery directory it scans (`/usr/local/bin/tools`) is empty. To let an agent act on the forge — post review comments, label issues — use or build an agent image that carries the forge tool binaries (or attach an MCP server), declare them under `spec.tools[]` / `spec.mcpServers[]` on the `AgentImage`, and select them per agent with `spec.enabledTools` (see [CRD Reference](docs/crd-reference.md)).
+
 ```yaml
 # agent-image.yaml
 apiVersion: ainsel.dev/v1alpha1
@@ -182,7 +184,7 @@ Then check the agent logs:
 kubectl logs -n ainsel -l ainsel.dev/agent=pr-reviewer --tail=50
 ```
 
-You should see the event received, the LLM invocation, and the tool call that posts the review comment.
+You should see the event received and the LLM invocation. If your agent image carries the forge tools (see step 4), you will also see the tool call that posts the review comment.
 
 ## Next Steps
 

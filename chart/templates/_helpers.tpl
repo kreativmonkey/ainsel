@@ -44,6 +44,53 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/*
+Whether an ingress className refers to ingress-nginx. An empty className is
+treated as nginx for backwards compatibility with the chart defaults. The
+nginx-specific regex paths and rewrite annotations are only rendered when
+this returns "true"; other controllers get literal Prefix paths instead.
+Usage:
+  {{- $isNginx := eq (include "ainsel.isNginx" .Values.hub.ingress.className) "true" -}}
+*/}}
+{{- define "ainsel.isNginx" -}}
+{{- if has (trim (lower (toString (default "nginx" .)))) (list "nginx" "kubernetes.io/ingress-nginx") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Build the annotation map for an Ingress, keeping nginx.ingress.kubernetes.io/*
+annotations only when the controller is ingress-nginx so other controllers
+(Traefik, HAProxy, cloud LBs) never receive rules they cannot interpret.
+"nginxOnly" entries are the chart's own hardcoded nginx annotations (added
+only for nginx); "extra" entries come from user values and are filtered the
+same way.
+Usage:
+  {{- $annotations := fromYaml (include "ainsel.ingressAnnotations" (dict "isNginx" $isNginx "nginxOnly" (dict "nginx.ingress.kubernetes.io/use-regex" "true") "extra" .Values.hub.ingress.annotations)) -}}
+*/}}
+{{- define "ainsel.ingressAnnotations" -}}
+{{- $isNginx := .isNginx -}}
+{{- $annotations := dict -}}
+{{- if $isNginx -}}
+{{- range $key, $value := (default (dict) .nginxOnly) -}}
+{{- $_ := set $annotations $key $value -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := (default (dict) .extra) -}}
+{{- if or $isNginx (not (hasPrefix "nginx.ingress.kubernetes.io/" $key)) -}}
+{{- $_ := set $annotations $key $value -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $annotations -}}
+{{- end -}}
+
+{{/* Roles claim; empty lets the services default to `groups`. */}}
+{{- define "ainsel.oidcRolesClaim" -}}
+{{- if .Values.auth.oidcRolesClaim -}}
+{{- .Values.auth.oidcRolesClaim -}}
+{{- else if .Values.auth.oidcProjectId -}}
+urn:zitadel:iam:org:project:roles
+{{- end -}}
+{{- end -}}
+
 {{/* Shared provider scopes for browser and MCP clients. */}}
 {{- define "ainsel.oidcScopes" -}}
 {{- if .Values.auth.oidcScopes -}}

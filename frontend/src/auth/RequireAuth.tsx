@@ -3,9 +3,11 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
 
 // RequireAuth gates the authenticated app shell per mode:
-//   - none:  everyone passes (there is no auth),
-//   - local: without a valid token the user is sent to /login,
-//   - oidc:  unauthenticated users are redirected to the IdP (legacy flow).
+//   - none:      everyone passes (there is no auth),
+//   - local:     without a valid token the user is sent to /login,
+//   - oidc+local: same as local — /login renders the chooser (issue #114);
+//                no auto-redirect to the IdP,
+//   - oidc:      unauthenticated users are redirected to the IdP (legacy flow).
 export function RequireAuth({ children }: { children: ReactNode }) {
   const auth = useAuth()
 
@@ -17,7 +19,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (auth.mode === 'none') return <>{children}</>
   if (!auth.ready) return null
   if (!auth.token) {
-    if (auth.mode === 'local') return <Navigate to="/login" replace />
+    if (auth.mode === 'local' || auth.mode === 'oidc+local') {
+      return <Navigate to="/login" replace />
+    }
     return null // oidc: signinRedirect is in flight
   }
   return <>{children}</>

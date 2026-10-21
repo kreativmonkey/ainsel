@@ -95,6 +95,61 @@ func TestAgentCRDHasPauseFields(t *testing.T) {
 	}
 }
 
+// TestAgentCRDProviderEnumAndBaseURLs guards issue #96: the checked-in Agent
+// CRD must constrain spec.llm.provider to the four supported values with no
+// default (a default would just move the silent-Ollama-Cloud fallback into
+// the schema), and must carry the per-provider baseUrl override fields.
+// Without the enum the API server accepts any provider string and only the
+// operator's InvalidLLMProvider condition reports the mistake; without
+// baseUrl the fields are silently pruned from stored objects.
+func TestAgentCRDProviderEnumAndBaseURLs(t *testing.T) {
+	b, err := os.ReadFile("../../config/crd/bases/ainsel.dev_agents.yaml")
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+
+	spec := mustMap(t, doc, "spec")
+	versions := mustSlice(t, spec, "versions")
+	if len(versions) == 0 {
+		t.Fatal("no versions in CRD")
+	}
+	v0 := mustMap(t, versions[0], "")
+	schema := mustMap(t, v0, "schema")
+	oapi := mustMap(t, schema, "openAPIV3Schema")
+	specProps := mustMap(t, mustMap(t, oapi, "properties"), "spec")
+	llmProps := mustMap(t, mustMap(t, specProps, "properties"), "llm")
+	provider := mustMap(t, llmProps, "properties")
+	provider = mustMap(t, provider, "provider")
+
+	enum := mustSlice(t, provider, "enum")
+	want := []string{"ollama-cloud", "opencode", "alibaba-cloud", "custom", "openai-codex"}
+	if len(enum) != len(want) {
+		t.Fatalf("spec.llm.provider enum = %v, want %v", enum, want)
+	}
+	for i, w := range want {
+		if enum[i] != w {
+			t.Fatalf("spec.llm.provider enum = %v, want %v", enum, want)
+		}
+	}
+	if _, ok := provider["default"]; ok {
+		t.Error("spec.llm.provider must have no schema default (issue #96 removes the silent fallback)")
+	}
+
+	// baseUrl overrides on the three built-in provider blocks.
+	for _, block := range []string{"ollamaCloud", "openCode", "alibabaCloud"} {
+		props := mustMap(t, mustMap(t, specProps, "properties"), block)
+		itemProps := mustMap(t, props, "properties")
+		if _, ok := itemProps["baseUrl"]; !ok {
+			t.Errorf("CRD %s schema missing 'baseUrl'; found keys: %v", block, keys(itemProps))
+		}
+	}
+}
+
 func mustMap(t *testing.T, parent any, key string) map[string]any {
 	t.Helper()
 	var m map[string]any

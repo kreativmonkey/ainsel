@@ -95,9 +95,25 @@ done
 # Provider + model: the custom provider is defined in
 # /home/agent/.pi/agent/models.json (mounted by the operator's
 # setup-pi-models init container). PI_PROVIDER selects which provider
-# entry pi uses; defaults to ollama-api-key for backwards compatibility.
-PI_PROVIDER="${PI_PROVIDER:-ollama-api-key}"
-set -- "$@" --provider "$PI_PROVIDER" --model "${OLLAMA_CLOUD_MODEL:-unsloth/gpt-oss-120b-GGUF:F16}"
+# entry pi uses. Both the provider and the model are required — there are
+# no defaults (issue #96): a silent fallback would send the agent's API
+# key and prompt traffic to a third-party SaaS the user never chose.
+# Failing here is visible via the pod status / last-terminated reason and
+# complements the operator's Ready=False condition.
+# The model contract is AINSEL_LLM_MODEL (provider-neutral). The legacy
+# OLLAMA_CLOUD_MODEL name is accepted as a transitional alias for one
+# release, so new images still run against operators that only set the
+# old name.
+if [ -z "${PI_PROVIDER:-}" ]; then
+  echo "entrypoint: PI_PROVIDER is required (set spec.llm.provider on the Agent)" >&2
+  exit 1
+fi
+MODEL="${AINSEL_LLM_MODEL:-${OLLAMA_CLOUD_MODEL:-}}"
+if [ -z "$MODEL" ]; then
+  echo "entrypoint: AINSEL_LLM_MODEL is required (set spec.llm.model on the Agent; the legacy alias OLLAMA_CLOUD_MODEL is also accepted)" >&2
+  exit 1
+fi
+set -- "$@" --provider "$PI_PROVIDER" --model "$MODEL"
 
 echo "entrypoint: exec pi $*" >&2
 

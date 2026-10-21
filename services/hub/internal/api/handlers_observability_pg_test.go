@@ -21,6 +21,11 @@ import (
 	"github.com/ainsel-project/ainsel/services/hub/internal/telemetry"
 )
 
+// iptr/fptr build ConversationMessage pointer fields: nil cache/cost means
+// "not reported" (issue #75), so tests must be able to tell nil from &0.
+func iptr(v int) *int         { return &v }
+func fptr(v float64) *float64 { return &v }
+
 // obsDBServer boots a Postgres testcontainer, migrates it, and returns a server
 // wired with the hub's own telemetry and task-log stores but **no Prometheus** —
 // the shape a standalone install actually runs in. The pool is returned so a
@@ -403,8 +408,8 @@ func TestObservability_TokenSummaryServedFromRecords(t *testing.T) {
 	// — what the records gave before migration 0022 — would report 123.
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-1", AgentName: "olli", Role: "assistant", Content: "[]",
-		InputTokens: 100, OutputTokens: 20, CacheReadTokens: 8000, CacheWriteTokens: 500,
-		CostUSD: 0.0345,
+		InputTokens: 100, OutputTokens: 20, CacheReadTokens: iptr(8000), CacheWriteTokens: iptr(500),
+		CostUSD: fptr(0.0345),
 	})
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-2", AgentName: "olli", Role: "assistant", Content: "[]",
@@ -437,8 +442,55 @@ func TestObservability_TokenSummaryServedFromRecords(t *testing.T) {
 	if body.CostUSD != 0.0345 {
 		t.Errorf("costUsd = %v, want 0.0345 (summed from the conversation rows)", body.CostUSD)
 	}
+	// The first seeded row reported cache and cost, so the window reads
+	// "reported" even though the second row reported neither (issue #75).
+	if !body.CacheReported || !body.CostReported {
+		t.Errorf("presence flags = %v/%v, want true/true", body.CacheReported, body.CostReported)
+	}
 	if body.PreviousTotalTokens != 0 {
 		t.Errorf("previousTotalTokens = %v, want 0 (nothing older than the window was seeded)", body.PreviousTotalTokens)
+	}
+}
+
+func TestObservability_TokenSummaryPresenceFlagsWhenSilent(t *testing.T) {
+	// Issue #75: a window whose rows never carried a cache or cost figure —
+	// user/toolResult rows plus an assistant row from a provider that reports
+	// neither — must read cacheReported/costReported false. The summed zeros
+	// are placeholders there; rendering them as a measured 0% / $0.00 is the
+	// bug this pins.
+	s, _ := obsDBServer(t, "/api/v1/observability/metrics/tokens/summary")
+	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
+		InvocationID: "inv-silent", AgentName: "olli", Role: "user", Content: "[]",
+		InputTokens: 10,
+	})
+	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
+		InvocationID: "inv-silent", AgentName: "olli", Role: "toolResult", Content: "[]",
+		OutputTokens: 4,
+	})
+	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
+		InvocationID: "inv-silent", AgentName: "olli", Role: "assistant", Content: "[]",
+		InputTokens: 100, OutputTokens: 20,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/metrics/tokens/summary?range=24h", nil)
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body TokensSummary
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TotalTokens != 134 {
+		t.Errorf("totalTokens = %v, want 134 (input/output still count)", body.TotalTokens)
+	}
+	if body.CacheReported {
+		t.Errorf("cacheReported = true, want false: no row in the window reported a cache figure")
+	}
+	if body.CostReported {
+		t.Errorf("costReported = true, want false: no row in the window reported a cost")
 	}
 }
 
@@ -480,7 +532,7 @@ func TestObservability_TokenTimeseriesServedFromRecordsIsZeroFilled(t *testing.T
 
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-1", AgentName: "olli", Role: "assistant", Content: "[]",
-		InputTokens: 100, OutputTokens: 20, CacheReadTokens: 8000, CacheWriteTokens: 500,
+		InputTokens: 100, OutputTokens: 20, CacheReadTokens: iptr(8000), CacheWriteTokens: iptr(500),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/metrics/tokens/timeseries?range=24h", nil)
@@ -528,7 +580,7 @@ func TestObservability_StatsTokensServedFromRecords(t *testing.T) {
 
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-1", AgentName: "olli", Role: "assistant", Content: "[]",
-		InputTokens: 100, OutputTokens: 20, CacheReadTokens: 8000, CacheWriteTokens: 500,
+		InputTokens: 100, OutputTokens: 20, CacheReadTokens: iptr(8000), CacheWriteTokens: iptr(500),
 	})
 
 	stats := s.GetStats(context.Background())
@@ -540,6 +592,15 @@ func TestObservability_StatsTokensServedFromRecords(t *testing.T) {
 	}
 	if stats.Tokens.CacheReadTokens != 8000 {
 		t.Errorf("stats cacheReadTokens = %v, want 8000", stats.Tokens.CacheReadTokens)
+	}
+	// The presence flags ride the same records path: the seed row reports
+	// cache but no cost, so cache must read reported and cost must not
+	// (issue #75).
+	if !stats.Tokens.CacheReported {
+		t.Errorf("stats cacheReported = false, want true (seeded row reports cache)")
+	}
+	if stats.Tokens.CostReported {
+		t.Errorf("stats costReported = true, want false (seeded row carries no cost)")
 	}
 }
 
@@ -585,8 +646,8 @@ func TestObservability_TokensBySubjectServedFromRecordsWithoutProm(t *testing.T)
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-1", AgentName: "olli", Role: "assistant", Content: "[]",
 		Model: "kimi", Repo: "org/repo", EventType: "pull_request.opened",
-		InputTokens: 100, OutputTokens: 20, CacheReadTokens: 8000, CacheWriteTokens: 500,
-		CostUSD: 0.0345,
+		InputTokens: 100, OutputTokens: 20, CacheReadTokens: iptr(8000), CacheWriteTokens: iptr(500),
+		CostUSD: fptr(0.0345),
 	})
 	seedConversation(t, s.taskLogs, &tasklogs.ConversationMessage{
 		InvocationID: "inv-1", AgentName: "olli", Role: "assistant", Content: "[]",

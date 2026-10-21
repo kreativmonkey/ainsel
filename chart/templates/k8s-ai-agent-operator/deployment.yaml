@@ -78,16 +78,6 @@ spec:
             - name: CHAT_MCP_IMAGE
               value: "{{ .Values.chatMCP.image.repository }}:{{ .Values.chatMCP.image.tag }}"
             {{- end }}
-            {{- if .Values.agentOperator.forgejoUrl }}
-            - name: FORGEJO_URL
-              value: {{ .Values.agentOperator.forgejoUrl | quote }}
-            {{- end }}
-            {{- if .Values.agentOperator.forgejoTokenSecret }}
-            - name: FORGEJO_TOKEN_SECRET_NAME
-              value: {{ .Values.agentOperator.forgejoTokenSecret.name | quote }}
-            - name: FORGEJO_TOKEN_SECRET_KEY
-              value: {{ .Values.agentOperator.forgejoTokenSecret.key | quote }}
-            {{- end }}
             {{- with .Values.agentOperator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -94,6 +94,39 @@ var _ = Describe("Agent Controller", func() {
 			}, deploy)).To(Succeed())
 		})
 
+		It("should expose the model as AINSEL_LLM_MODEL with OLLAMA_CLOUD_MODEL as a transitional alias", func() {
+			// Issue #96: the runtime model contract is provider-neutral
+			// AINSEL_LLM_MODEL. OLLAMA_CLOUD_MODEL is dual-written with the
+			// same value for one release so old and new runtime images work
+			// against old and new operators in either skew direction.
+			controllerReconciler := &AgentReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			container := mustDeployment("agent-" + resourceName).Spec.Template.Spec.Containers[0]
+			var canonical, alias string
+			seenCanonical, seenAlias := false, false
+			for i := range container.Env {
+				switch container.Env[i].Name {
+				case "AINSEL_LLM_MODEL":
+					seenCanonical = true
+					canonical = container.Env[i].Value
+				case "OLLAMA_CLOUD_MODEL":
+					seenAlias = true
+					alias = container.Env[i].Value
+				}
+			}
+			Expect(seenCanonical).To(BeTrue(), "AINSEL_LLM_MODEL must be set on the agent container")
+			Expect(seenAlias).To(BeTrue(), "OLLAMA_CLOUD_MODEL must stay set during the alias window")
+			Expect(canonical).To(Equal("glm-5.1:cloud"))
+			Expect(alias).To(Equal(canonical), "the alias must carry the same value as the canonical name")
+		})
+
 		It("should stamp a secret-hash annotation on the Deployment pod template", func() {
 			By("Creating the referenced secrets")
 			agentName := "agent-" + resourceName

@@ -19,8 +19,10 @@ const (
 
 	// metricCostUsed is the USD counterpart of metricTokensUsed, raised by the
 	// runtime from pi's usage.cost.total (priced via the model's cost block in
-	// the generated models.json, spec.llm.cost). Agents whose model carries no
-	// cost block never raise it — the same zero pi reports.
+	// the generated models.json, spec.llm.cost). Presence is meaningful (issue
+	// #75): an agent whose model carries no cost block raises nothing, while a
+	// priced model that costs nothing raises 0 — so a series that exists with
+	// value 0 is a measured free run, and no series means "not reported".
 	metricCostUsed = "agent_cost_usd_total"
 
 	// defaultSummaryRange is the range used when the caller does not supply one.
@@ -58,8 +60,10 @@ func tokenTotal(input, output, cacheRead, cacheWrite float64) float64 {
 
 // tokenTotalsByType returns per-token_type totals for a window in a single
 // grouped query. A component the runtime never published is absent from the
-// map and reads as zero, which keeps "no data yet" and "zero so far"
-// indistinguishable — the desired UX for a freshly-started hub.
+// map; a component it published with value 0 is present with value 0. Callers
+// use that distinction (issue #75): presence of a cache_read/cache_write key
+// means the runtime reports cache figures — a real 0% hit rate — while its
+// absence means "not reported" and must not render as a measured zero.
 func tokenTotalsByType(ctx context.Context, p *prometheus.Client, rangeKey string) (map[string]float64, error) {
 	result, err := p.Query(ctx,
 		fmt.Sprintf(`sum by (token_type) (increase(%s[%s]))`, metricTokensUsed, rangeKey))
@@ -77,6 +81,13 @@ func tokenTotalsByType(ctx context.Context, p *prometheus.Client, rangeKey strin
 //
 // Source names the backend the figures came from: prometheus, or postgres when
 // the hub answered from its own conversation rows.
+//
+// CacheReported/CostReported say whether the window held any *reported*
+// cache/cost figure (issue #75). When false, the corresponding numerics are
+// sums over rows that never carried the figure — readers must render them as
+// "not reported", never as a measured 0 / 0% / $0.00. A reported zero counts
+// as reported, so a provider that genuinely reports cached_tokens: 0 keeps
+// its real 0%.
 type TokensSummary struct {
 	Source              string  `json:"source"`
 	InputTokens         float64 `json:"inputTokens"`
@@ -86,10 +97,13 @@ type TokensSummary struct {
 	TotalTokens         float64 `json:"totalTokens"`
 	PreviousTotalTokens float64 `json:"previousTotalTokens"`
 	// CostUSD is the priced consumption over the window, summed from pi's
-	// per-message usage.cost. It is only non-zero once the agent's model is
-	// priced (spec.llm.cost) and the runtime reports cost — see issue #281.
-	CostUSD   float64   `json:"costUsd"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	// per-message usage.cost. It is only meaningful when CostReported is
+	// true: an unpriced model reports nothing (issue #75), which is not the
+	// same fact as a run that cost nothing.
+	CostUSD       float64   `json:"costUsd"`
+	CacheReported bool      `json:"cacheReported"`
+	CostReported  bool      `json:"costReported"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // TokensTimeseries powers the sparkline embedded in the tile.
@@ -102,6 +116,11 @@ type TokensTimeseries struct {
 
 // TokenSubjectRow is one row in the Agent activity table — a unique
 // (agent, repo, eventType, model) tuple with its tokens.
+//
+// CacheReported/CostReported are per-row presence flags (issue #75): false
+// means no conversation in that group ever carried the figure, so the summed
+// cache/cost numerics are placeholders and readers must render them as "not
+// reported" rather than 0 / $0.00.
 type TokenSubjectRow struct {
 	Agent            string  `json:"agent"`
 	AgentName        string  `json:"agentName"`
@@ -114,6 +133,8 @@ type TokenSubjectRow struct {
 	CacheWriteTokens float64 `json:"cacheWriteTokens"`
 	TotalTokens      float64 `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
+	CacheReported    bool    `json:"cacheReported"`
+	CostReported     bool    `json:"costReported"`
 }
 
 // TokensBySubject is the response for the /metrics/tokens/by-subject endpoint.
@@ -217,6 +238,8 @@ func (s *Server) getTokensSummary(w http.ResponseWriter, r *http.Request) {
 			TotalTokens:         cur.Total(),
 			PreviousTotalTokens: prior.Total(),
 			CostUSD:             cur.CostUSD,
+			CacheReported:       cur.CacheReported,
+			CostReported:        cur.CostReported,
 			UpdatedAt:           time.Now().UTC(),
 		}
 		s.observabilityCache.set(cacheKey, resp)
@@ -241,11 +264,19 @@ func (s *Server) getTokensSummary(w http.ResponseWriter, r *http.Request) {
 	output := totals[tokenTypeOutput]
 	cacheRead := totals[tokenTypeCacheRead]
 	cacheWrite := totals[tokenTypeCacheWrite]
+	// Presence of the series is the report (issue #75): a cache_read or
+	// cache_write series that exists — even with value 0 — means the runtime
+	// reports cache figures, so the zeros are measured; absence means the
+	// upstream is silent and the tile must say "not reported".
+	_, cacheReadSeries := totals[tokenTypeCacheRead]
+	_, cacheWriteSeries := totals[tokenTypeCacheWrite]
+	cacheReported := cacheReadSeries || cacheWriteSeries
 
 	// Cost has no token_type breakdown: the runtime raises one USD total per
 	// message. A hub whose agents run unpriced models simply has no series —
-	// singleScalar reads that as 0, the same figure pi itself reports.
-	cost, err := singleScalar(ctx, s.prom,
+	// that is "not reported", not a measured $0 (issue #75), so the query
+	// reports vector emptiness instead of coercing it to zero.
+	cost, costReported, err := singleScalarReported(ctx, s.prom,
 		fmt.Sprintf(`sum(increase(%s[%s]))`, metricCostUsed, rangeKey))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to query cost metrics: "+err.Error())
@@ -261,6 +292,8 @@ func (s *Server) getTokensSummary(w http.ResponseWriter, r *http.Request) {
 		TotalTokens:         tokenTotal(input, output, cacheRead, cacheWrite),
 		PreviousTotalTokens: prior,
 		CostUSD:             cost,
+		CacheReported:       cacheReported,
+		CostReported:        costReported,
 		UpdatedAt:           time.Now().UTC(),
 	}
 	s.observabilityCache.set(cacheKey, resp)
@@ -417,6 +450,8 @@ func (s *Server) getTokensBySubject(w http.ResponseWriter, r *http.Request) {
 				CacheWriteTokens: float64(row.CacheWriteTokens),
 				TotalTokens:      tokenTotal(float64(row.InputTokens), float64(row.OutputTokens), float64(row.CacheReadTokens), float64(row.CacheWriteTokens)),
 				CostUSD:          row.CostUSD,
+				CacheReported:    row.CacheReported,
+				CostReported:     row.CostReported,
 			})
 		}
 		sortTokenSubjectRows(out)
@@ -440,8 +475,9 @@ func (s *Server) getTokensBySubject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cost rides the same subject labels as the token counter, as its own
-	// series (no token_type). Agents on unpriced models raise no series and
-	// their rows read 0 — the same figure pi reports for them.
+	// series (no token_type). Presence of the series is the report (issue
+	// #75): agents on unpriced models raise no series and their rows read
+	// costReported false — "not reported", not a measured $0.
 	costQ := fmt.Sprintf(`sum by (agent, repo, event_type, model) (increase(%s[%s]))`, metricCostUsed, rangeKey)
 	costResult, err := s.prom.Query(ctx, costQ)
 	if err != nil {
@@ -474,8 +510,10 @@ func (s *Server) getTokensBySubject(w http.ResponseWriter, r *http.Request) {
 			row.OutputTokens += m.Value
 		case tokenTypeCacheRead:
 			row.CacheReadTokens += m.Value
+			row.CacheReported = true
 		case tokenTypeCacheWrite:
 			row.CacheWriteTokens += m.Value
+			row.CacheReported = true
 		}
 	}
 	for _, m := range costResult.Data {
@@ -494,6 +532,7 @@ func (s *Server) getTokensBySubject(w http.ResponseWriter, r *http.Request) {
 			rows[key] = row
 		}
 		row.CostUSD += m.Value
+		row.CostReported = true
 	}
 
 	nameMap := s.agentNameMap(ctx)
@@ -550,10 +589,11 @@ type subjectKey struct {
 // Backed by the task_conversations table: since migration 0022 it persists all
 // four components pi reports, so TotalTokens here follows the same accounting
 // rule as the summary tile (tokenTotal over every component) and the two views
-// are comparable for conversations reported by cache-aware runtimes. Rows
-// written by older runtimes carry zero cache columns, so an install whose
-// retention window still holds pre-migration rows reads low on both views alike
-// rather than disagreeing with itself.
+// are comparable for conversations reported by cache-aware runtimes. Since
+// migration 0025 the cache/cost columns are NULL for figures the runtime never
+// reported, and CacheReported/CostReported carry that distinction per event
+// (issue #75): false means the summed figure is a placeholder for "not
+// reported", not a measured zero.
 type TokenEventRow struct {
 	Event            string  `json:"event"`
 	InputTokens      float64 `json:"inputTokens"`
@@ -562,6 +602,8 @@ type TokenEventRow struct {
 	CacheWriteTokens float64 `json:"cacheWriteTokens"`
 	TotalTokens      float64 `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
+	CacheReported    bool    `json:"cacheReported"`
+	CostReported     bool    `json:"costReported"`
 }
 
 // TokensByEvent is the response for the /metrics/tokens/by-event endpoint.
@@ -640,6 +682,9 @@ func aggregateTokensByEvent(invRows []tasklogs.InvocationTokenRow, invStore invo
 		er.CacheReadTokens += float64(row.CacheReadTokens)
 		er.CacheWriteTokens += float64(row.CacheWriteTokens)
 		er.CostUSD += row.CostUSD
+		// An event is "reported" if any of its invocations reported (issue #75).
+		er.CacheReported = er.CacheReported || row.CacheReported
+		er.CostReported = er.CostReported || row.CostReported
 	}
 
 	out := make([]TokenEventRow, 0, len(eventTokens))

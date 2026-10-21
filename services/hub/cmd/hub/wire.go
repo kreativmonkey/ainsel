@@ -175,9 +175,12 @@ func wireAPIServer(c *container, cfg containerConfig) *api.Server {
 
 // wireAuthMiddleware sets up the API auth middleware according to
 // HUB_AUTH_MODE: "oidc" (external IdP, today's default), "local" (hub
-// username/password accounts, issue #108), or "none" (no auth; requires
+// username/password accounts, issue #108), "oidc+local" (both at once,
+// issue #114), or "none" (no auth; requires
 // HUB_ALLOW_INSECURE_NO_AUTH=true). When HUB_AUTH_MODE is unset the mode is
 // derived from the common OIDC issuer and audience settings when unset.
+// The derived mode is never "oidc+local": coexistence is a deliberate
+// operational decision and must be requested explicitly.
 func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) error {
 	oidcCfg := oidc.FromEnvironment()
 	issuer, audience := oidcCfg.Issuer, oidcCfg.Audience
@@ -197,17 +200,24 @@ func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) 
 		if issuer == "" || audience == "" {
 			return fmt.Errorf("auth mode oidc requires OIDC_ISSUER and OIDC_AUDIENCE (or OIDC_CLIENT_ID) to be set")
 		}
-		if err := wireOIDCAuth(c, issuer, audience); err != nil {
+		if err := wireOIDCAuth(c, oidcCfg); err != nil {
 			return err
 		}
 	case "local":
 		if err := wireLocalAuth(ctx, c); err != nil {
 			return err
 		}
+	case "oidc+local":
+		if issuer == "" || audience == "" {
+			return fmt.Errorf("auth mode oidc+local requires OIDC_ISSUER and OIDC_AUDIENCE (or OIDC_CLIENT_ID) to be set")
+		}
+		if err := wireOIDCPlusLocalAuth(ctx, c, oidcCfg); err != nil {
+			return err
+		}
 	case "none":
 		slog.Warn("auth mode none: API runs without authentication middleware")
 	default:
-		return fmt.Errorf("invalid HUB_AUTH_MODE %q (want oidc, local, or none)", mode)
+		return fmt.Errorf("invalid HUB_AUTH_MODE %q (want oidc, local, oidc+local, or none)", mode)
 	}
 
 	if err := c.apiServer.ValidateAuthConfig(cfg.hubAllowInsecureNoAuth); err != nil {
@@ -217,7 +227,7 @@ func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) 
 		slog.Error("========================================")
 		slog.Error("API IS RUNNING WITHOUT AUTHENTICATION")
 		slog.Error("All /api/v1/* endpoints are open to any caller.")
-		slog.Error("Set HUB_AUTH_MODE=oidc or =local to enable auth.")
+		slog.Error("Set HUB_AUTH_MODE=oidc, =local, or =oidc+local to enable auth.")
 		slog.Error("This mode is intended for local development ONLY.")
 		slog.Error("========================================",
 			"override", "HUB_ALLOW_INSECURE_NO_AUTH=true",
@@ -244,19 +254,20 @@ func wireAuthMiddleware(ctx context.Context, c *container, cfg containerConfig) 
 	return nil
 }
 
-// wireOIDCAuth builds the OIDC middleware chain (previous default behavior).
-func wireOIDCAuth(c *container, issuer, audience string) error {
-	slog.Info("OIDC auth enabled", "issuer", issuer, "audience", audience)
+// buildOIDCMiddleware resolves the OIDC endpoints via discovery and builds
+// the verification middleware. Shared by the "oidc" and "oidc+local" modes
+// so the subtle discovery + escape-hatch logic stays identical in both.
+func buildOIDCMiddleware(oidcCfg oidc.Config) (func(http.Handler) http.Handler, string, error) {
 	// Resolve JWKS/userinfo endpoints from the issuer's OIDC discovery
 	// document. Hardcoding provider-specific paths broke username/email
 	// enrichment on Zitadel versions whose userinfo endpoint lives at
 	// /oidc/v1/userinfo instead of /oauth/v2/userinfo. There is no
 	// fallback: a broken issuer must fail startup visibly.
 	discoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	jwksURL, userInfoURL, derr := oidc.ResolveEndpoints(discoveryCtx, nil, issuer)
+	jwksURL, userInfoURL, derr := oidc.ResolveEndpoints(discoveryCtx, nil, oidcCfg.Issuer)
 	cancel()
 	if derr != nil {
-		return fmt.Errorf("oidc endpoint resolution: %w", derr)
+		return nil, "", fmt.Errorf("oidc endpoint resolution: %w", derr)
 	}
 	slog.Info("OIDC endpoints resolved via discovery", "jwks", jwksURL, "userinfo", userInfoURL)
 	// Escape hatches: allow operators to pin endpoints explicitly.
@@ -266,31 +277,46 @@ func wireOIDCAuth(c *container, issuer, audience string) error {
 	if v := os.Getenv("OIDC_USERINFO_URL"); v != "" {
 		userInfoURL = v
 	}
-	oidcMW, err := oidc.NewMiddleware(oidc.Config{
-		Issuer:      issuer,
-		Audience:    audience,
-		RolesClaim:  os.Getenv("OIDC_ROLES_CLAIM"),
-		SigningAlgs: oidc.FromEnvironment().SigningAlgs,
-		JWKSURL:     jwksURL,
-		UserInfoURL: userInfoURL,
-	})
+	oidcCfg.JWKSURL = jwksURL
+	oidcCfg.UserInfoURL = userInfoURL
+	oidcMW, err := oidc.NewMiddleware(oidcCfg)
 	if err != nil {
-		return fmt.Errorf("auth middleware setup: %w", err)
+		return nil, "", fmt.Errorf("auth middleware setup: %w", err)
 	}
-	userTokenMW := usertokens.NewMiddleware(c.userTokenStore, func(ctx context.Context, userID string) (string, error) {
+	return oidcMW, userInfoURL, nil
+}
+
+// buildUserTokenMiddleware builds the user-token (API token) middleware used
+// by every authenticated mode.
+func buildUserTokenMiddleware(c *container) func(http.Handler) http.Handler {
+	return usertokens.NewMiddleware(c.userTokenStore, func(ctx context.Context, userID string) (string, error) {
 		u, err := c.authzStore.GetUser(ctx, userID)
 		if err != nil {
 			return "", err
 		}
 		return u.Username, nil
 	})
+}
+
+// wireOIDCAuth builds the OIDC middleware chain (previous default behavior).
+func wireOIDCAuth(c *container, oidcCfg oidc.Config) error {
+	slog.Info("OIDC auth enabled", "issuer", oidcCfg.Issuer, "audience", oidcCfg.Audience)
+	oidcMW, userInfoURL, err := buildOIDCMiddleware(oidcCfg)
+	if err != nil {
+		return err
+	}
+	userTokenMW := buildUserTokenMiddleware(c)
 	// Authorization is enforced in handlers via requireRead/requireWrite/
 	// requireManage helpers. The middleware chain only handles authentication.
+	// The disabled guard sits inside both token middlewares so a disabled
+	// user is rejected even with a still-valid OIDC access token; it is
+	// required in every future chain too (e.g. a combined oidc+local mode).
 	// The identity persistence middleware is the innermost handler so it
 	// runs after userTokenMW and oidcMW have populated the request context
 	// with the authenticated user's identity.
+	disabledGuard := authz.NewDisabledGuard(c.authzStore)
 	c.apiServer.SetAuthMiddleware(func(next http.Handler) http.Handler {
-		return userTokenMW(oidcMW(c.apiServer.IdentityPersistMiddleware(next)))
+		return userTokenMW(oidcMW(disabledGuard(c.apiServer.IdentityPersistMiddleware(next))))
 	})
 	c.apiServer.SetUserInfoURL(userInfoURL)
 	return nil
@@ -308,22 +334,55 @@ func wireLocalAuth(ctx context.Context, c *container) error {
 		return fmt.Errorf("bootstrap local admin: %w", err)
 	}
 
-	localMW := localauth.NewMiddleware([]byte(secret))
-	userTokenMW := usertokens.NewMiddleware(c.userTokenStore, func(ctx context.Context, userID string) (string, error) {
-		u, err := c.authzStore.GetUser(ctx, userID)
-		if err != nil {
-			return "", err
-		}
-		return u.Username, nil
-	})
+	localMW := localauth.NewMiddleware([]byte(secret), c.authzStore)
+	userTokenMW := buildUserTokenMiddleware(c)
+	// The disabled guard sits inside both token middlewares (required in any
+	// future combined chain too): local session JWTs are verified statelessly,
+	// so this is what makes disabling take effect immediately.
+	disabledGuard := authz.NewDisabledGuard(c.authzStore)
 	c.apiServer.SetAuthMiddleware(func(next http.Handler) http.Handler {
 		// RequireAuth sits inside both token middlewares: anonymous requests
 		// fall through the token checks and are rejected there, mirroring how
 		// the OIDC middleware rejects missing bearer tokens.
-		return userTokenMW(localMW(localauth.RequireAuth(c.apiServer.IdentityPersistMiddleware(next))))
+		return userTokenMW(localMW(localauth.RequireAuth(disabledGuard(c.apiServer.IdentityPersistMiddleware(next)))))
 	})
 	c.apiServer.SetLocalAuthSecret([]byte(secret))
 	slog.Info("local auth enabled", "loginEndpoint", "/api/v1/auth/login")
+	return nil
+}
+
+// wireOIDCPlusLocalAuth builds the coexistence chain for auth mode
+// "oidc+local" (issue #114): local session JWTs are verified by the local
+// layer and never reach the OIDC middleware; everything else (OIDC access
+// tokens and anonymous requests) is handled by the OIDC middleware, which
+// supplies the anonymous rejection — so no localauth.RequireAuth closer is
+// needed in this mode. Both halves are required: a half-configured
+// coexistence install must fail startup, not silently drop the break-glass
+// path or the SSO path.
+func wireOIDCPlusLocalAuth(ctx context.Context, c *container, oidcCfg oidc.Config) error {
+	secret := os.Getenv("HUB_LOCAL_JWT_SECRET")
+	if secret == "" {
+		return fmt.Errorf("auth mode oidc+local requires HUB_LOCAL_JWT_SECRET to be set")
+	}
+	oidcMW, userInfoURL, err := buildOIDCMiddleware(oidcCfg)
+	if err != nil {
+		return err
+	}
+	if err := bootstrapLocalAdmin(ctx, c.authzStore); err != nil {
+		return fmt.Errorf("bootstrap local admin: %w", err)
+	}
+	chainMW := localauth.NewChainMiddleware([]byte(secret), c.authzStore, oidcMW)
+	userTokenMW := buildUserTokenMiddleware(c)
+	// Same innermost-guard rule as the single-mode chains: both halves of
+	// chainMW verify tokens statelessly, so the disabled check must run
+	// inside chainMW and outside IdentityPersistMiddleware.
+	disabledGuard := authz.NewDisabledGuard(c.authzStore)
+	c.apiServer.SetAuthMiddleware(func(next http.Handler) http.Handler {
+		return userTokenMW(chainMW(disabledGuard(c.apiServer.IdentityPersistMiddleware(next))))
+	})
+	c.apiServer.SetLocalAuthSecret([]byte(secret))
+	c.apiServer.SetUserInfoURL(userInfoURL)
+	slog.Info("oidc+local auth enabled", "issuer", oidcCfg.Issuer, "audience", oidcCfg.Audience, "loginEndpoint", "/api/v1/auth/login")
 	return nil
 }
 

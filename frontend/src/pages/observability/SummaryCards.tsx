@@ -12,9 +12,12 @@ import { abbreviateNumber, formatPercent, formatUSD } from '../../utils/format'
  *  Pi's usage.input excludes cache traffic, so the denominator is
  *  input + cacheRead + cacheWrite. A sudden drop means something is
  *  invalidating the prompt prefix — the same work re-billed at the full
- *  input rate (issue #281). Undefined when no prompt tokens were seen. */
+ *  input rate (issue #281). Undefined when no prompt tokens were seen, and
+ *  when the hub says cache was never reported in the window (issue #75) —
+ *  a silent upstream is not a measured 0% and must not render as one. */
 function cacheHitRate(tokens?: TokensSummary): number | undefined {
   if (!tokens) return undefined
+  if (tokens.cacheReported === false) return undefined
   const input = tokens.inputTokens ?? 0
   const cacheRead = tokens.cacheReadTokens ?? 0
   const cacheWrite = tokens.cacheWriteTokens ?? 0
@@ -42,6 +45,13 @@ type SummaryCardsProps = {
 
 export function SummaryCards({ summary, tokens, range }: SummaryCardsProps) {
   const rangeSuffix = range ? ` · ${range}` : ''
+  // Presence flags (issue #75). A missing flag is a hub older than the
+  // flags: unknown, so keep the legacy rendering rather than claiming
+  // "not reported". A false flag means the window never carried the figure:
+  // the numerics are placeholders, so the tile shows '—' with a "not
+  // reported" sub-line instead of a measured 0% / $0.00.
+  const cacheNotReported = tokens?.cacheReported === false
+  const costNotReported = tokens?.costReported === false
   const cards: Card[] = [
     {
       key: 'consumed',
@@ -100,15 +110,19 @@ export function SummaryCards({ summary, tokens, range }: SummaryCardsProps) {
       code: 'TK·06',
       value: cacheHitRate(tokens),
       formatter: (n) => formatPercent(n, 0),
-      sub: 'a drop re-bills the prompt prefix',
+      sub: cacheNotReported
+        ? 'not reported by the provider'
+        : 'a drop re-bills the prompt prefix',
     },
     {
       key: 'cost',
       label: `Cost${rangeSuffix}`,
       code: 'TK·07',
-      value: tokens?.costUsd,
+      value: costNotReported ? undefined : tokens?.costUsd,
       formatter: (n) => formatUSD(n),
-      sub: 'needs spec.llm.cost pricing',
+      sub: costNotReported
+        ? 'not reported — model unpriced'
+        : 'needs spec.llm.cost pricing',
       to: tokensLink({ range }),
     },
   ]

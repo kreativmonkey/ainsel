@@ -76,7 +76,7 @@ from the chart's shared `auth.internalValidateSecret`).
 | `AGENT_NAME` | yes | Logical agent name (used in hub API paths) |
 | `HUB_URL` | yes | Hub backend base URL (e.g. `http://ainsel-hub:8080`) |
 | `HUB_INTERNAL_VALIDATE_SECRET` | yes | Shared secret for `X-Internal-Token` header |
-| `OLLAMA_CLOUD_MODEL` | yes | Model identifier; reported in token metrics |
+| `AINSEL_LLM_MODEL` | yes | Model identifier; reported in token metrics. The legacy alias `OLLAMA_CLOUD_MODEL` is read as a fallback for one release (issue #96); there is no default |
 | `NAK_DELAY_MS` | no | NACK backoff in ms before the hub re-delivers a failed task (default `60000`) |
 | `TURN_TIMEOUT_MS` | no | Maximum time in ms to wait for a single LLM turn before aborting and nacking (default `600000`, i.e. 10 minutes) |
 | `TURN_SETTLE_TIMEOUT_MS` | no | Maximum time in ms to wait for an aborted turn to settle before proceeding (default `10000`, i.e. 10 seconds). Backstop only — after `ctx.abort()` the run should settle in milliseconds. |
@@ -97,10 +97,26 @@ Summing only `input` and `output` under-reports what the model actually processe
 the whole cached volume, which in an agent loop is usually the large majority of the
 prompt.
 
-Components that are zero or absent are not published, so a provider without prompt
-caching produces no `cache_read` / `cache_write` series at all. Treat a missing series
-as zero, and use `cache_read / (input + cache_read + cache_write)` as the cache hit
-rate when checking whether prompt caching is actually working.
+A component is published whenever pi reports it as a finite non-negative
+number — including 0 — and only absent, negative or non-numeric values are
+dropped. A reported `cached_tokens: 0` therefore reaches Prometheus as a
+0-valued `cache_read` series: presence of a series means "the provider
+reports cache figures", and its absence means "not reported" — two different
+facts the hub distinguishes (issue #75). Use
+`cache_read / (input + cache_read + cache_write)` as the cache hit rate when
+checking whether prompt caching is actually working.
+
+Usage is booked from every LLM call pi reports, not only from assistant messages:
+`message_end` (any message that carries `usage`, which pi also types on tool results),
+`session_compact`, and `session_tree`. The last two are one-shot completions — pi
+summarises a compaction or a discarded branch with a direct call that never appears as
+a message — and a compaction prompt is the whole conversation, so it is the largest
+single prompt a run makes. Those completions also write a `task_conversations` row with
+`role: "system"` and `stopReason` `compaction` or `branch_summary`, because the hub
+reads its own rows in preference to these counters (see docs/observability.md); a
+counter-only fix would leave them invisible in the console. They carry no model of their
+own, so they are labelled with `AINSEL_LLM_MODEL` — the model the run summarises with
+(the legacy `OLLAMA_CLOUD_MODEL` alias is accepted while the dual-write window is open).
 
 Usage is booked from every LLM call pi reports, not only from assistant messages:
 `message_end` (any message that carries `usage`, which pi also types on tool results),
@@ -143,7 +159,7 @@ result contains one, the hub never receives it.
 1. On first use, the runner collects all `process.env` values.
 2. Values are excluded from redaction if:
    - The variable name is in a denylist of known non-sensitive vars
-     (`AGENT_NAME`, `HUB_URL`, `OLLAMA_CLOUD_MODEL`, `PATH`, `HOME`, etc.)
+     (`AGENT_NAME`, `HUB_URL`, `AINSEL_LLM_MODEL`, `PATH`, `HOME`, etc.)
    - The variable name starts with `AINSEL_EVENT_` (per-task context vars)
    - The value is shorter than 8 characters (avoids corrupting common
      short strings like booleans, ports, or single words)
