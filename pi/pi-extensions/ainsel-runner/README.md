@@ -224,7 +224,9 @@ must remain trusted. This tool boundary is not an OS sandbox for arbitrary code.
 ### GitHub App comment reviews
 
 Set `AINSEL_REVIEW_REPOS` to a comma-separated allowlist of public repositories
-to accept only an exact `/review` comment on an open pull request. This mode
+to accept an exact `/review` or `/review-inline` comment on an open pull request.
+`/review` posts a summary review. `/review-inline` posts a review summary plus
+one GitHub review thread per actionable finding on an added diff line. This mode
 also requires `AINSEL_GITHUB_APP_ID`, `AINSEL_GITHUB_APP_SLUG`,
 `AINSEL_GITHUB_INSTALLATION_ID`, and a private key supplied through
 `AINSEL_GITHUB_APP_PRIVATE_KEY_FILE` (a mounted Secret) or

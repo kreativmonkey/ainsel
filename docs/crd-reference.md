@@ -475,7 +475,8 @@ review context. Set `AINSEL_REVIEW_REPO` (for example,
 review. In this single-repository mode, findings appear only in the AInsel
 task transcript.
 
-For a GitHub App that reviews public PRs on an exact `/review` comment, set
+For a GitHub App that reviews public PRs on an exact `/review` summary command
+or `/review-inline` command with line-specific threads, set
 `AINSEL_REVIEW_REPOS` to an explicit comma-separated repository allowlist and
 configure the App ID, slug, installation ID, and private key as described in
 [`pi/pi-extensions/ainsel-runner/README.md`](../pi/pi-extensions/ainsel-runner/README.md).

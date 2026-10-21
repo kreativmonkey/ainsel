@@ -24,6 +24,24 @@ export function reviewText(messages, generation) {
   return body;
 }
 
+export function inlineReview(text) {
+  let review;
+  try { review = JSON.parse(text); } catch { fail('inline review must be JSON'); }
+  if (!review || typeof review !== 'object' || Array.isArray(review)
+      || typeof review.summary !== 'string' || !review.summary.trim() || review.summary.length > 60000
+      || !Array.isArray(review.findings) || review.findings.length > 20) fail('invalid inline review');
+  const comments = review.findings.map(finding => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)
+        || typeof finding.path !== 'string' || !finding.path
+        || !Number.isSafeInteger(finding.line) || finding.line <= 0
+        || typeof finding.body !== 'string' || !finding.body.trim() || finding.body.length > 8000) {
+      fail('invalid inline finding');
+    }
+    return { path: finding.path, line: finding.line, side: 'RIGHT', body: finding.body };
+  });
+  return { body: review.summary, comments };
+}
+
 function appJwt(appId, privateKey, now = Date.now()) {
   if (!/^[1-9][0-9]*$/.test(String(appId)) || !privateKey) fail('App credentials are missing');
   const timestamp = Math.floor(now / 1000);
@@ -74,7 +92,8 @@ export async function resolveReviewComment(task, repositories, credentials, fetc
   if (task.headers?.type !== 'issue_comment' || task.payload?.action !== 'created') fail('expected a new issue comment');
   const payload = task.payload;
   if (!payload.issue?.pull_request || payload.issue.state !== 'open') fail('comment is not on an open pull request');
-  if (!/^\s*\/review\s*$/.test(payload.comment?.body ?? '')) fail('comment is not the /review command');
+  const command = payload.comment?.body?.trim();
+  if (command !== '/review' && command !== '/review-inline') fail('comment is not a review command');
   if (payload.sender?.type !== 'User' || payload.sender.login !== payload.comment?.user?.login) fail('invalid command author');
   if (!Number.isSafeInteger(payload.comment?.id) || payload.comment.id <= 0) fail('invalid comment ID');
 
@@ -94,11 +113,46 @@ export async function resolveReviewComment(task, repositories, credentials, fetc
       headers: { ...task.headers, type: 'pull_request' },
       payload: { ...payload, number: identity.number, pull_request: { ...pr, number: identity.number } },
     },
-    publication: { ...identity, commentId: payload.comment.id, headSha: pr.head.sha, baseSha: pr.base.sha },
+    publication: { ...identity, command, commentId: payload.comment.id, headSha: pr.head.sha, baseSha: pr.base.sha },
   };
 }
 
-export async function publishReview(publication, body, credentials, fetcher = fetch) {
+function addedLines(patch) {
+  const lines = new Set();
+  let line;
+  for (const part of patch.split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(part);
+    if (hunk) { line = Number(hunk[1]); continue; }
+    if (line === undefined) continue;
+    if (part.startsWith('+')) { lines.add(line); line++; }
+    else if (part.startsWith(' ')) line++;
+  }
+  return lines;
+}
+
+async function validateComments(fetcher, path, token, comments) {
+  const pending = new Map();
+  for (const comment of comments) {
+    if (!pending.has(comment.path)) pending.set(comment.path, new Set());
+    pending.get(comment.path).add(comment.line);
+  }
+  for (let page = 1; page <= 30 && pending.size; page++) {
+    const files = await responseJSON(fetcher, `${path}/files?per_page=100&page=${page}`, { token });
+    if (!Array.isArray(files)) fail('invalid pull request file list');
+    for (const file of files) {
+      const requested = pending.get(file.filename);
+      if (!requested) continue;
+      if (typeof file.patch !== 'string') fail(`diff unavailable for ${file.filename}`);
+      const allowed = addedLines(file.patch);
+      if ([...requested].some(line => !allowed.has(line))) fail(`line is not added in ${file.filename}`);
+      pending.delete(file.filename);
+    }
+    if (files.length < 100) break;
+  }
+  if (pending.size) fail('inline finding refers to a file outside the pull request diff');
+}
+
+export async function publishReview(publication, review, credentials, fetcher = fetch) {
   const { repository, number, commentId, headSha, baseSha, installationId } = publication;
   if (installationId !== credentials.installationId || !shaPattern.test(headSha) || !shaPattern.test(baseSha)) fail('review identity changed');
   if (!/^[a-z0-9-]+$/.test(credentials.appSlug ?? '')) fail('App slug is missing');
@@ -115,8 +169,16 @@ export async function publishReview(publication, body, credentials, fetcher = fe
     if (reviews.length < 100) break;
     if (page === 10) fail('too many reviews to check for duplicate delivery');
   }
+  const content = publication.command === '/review-inline' ? inlineReview(review) : { body: review, comments: [] };
+  if (content.comments.length) {
+    await validateComments(fetcher, path, token, content.comments);
+    const current = await responseJSON(fetcher, path, { token });
+    if (current.state !== 'open' || current.head?.sha !== headSha || current.base?.sha !== baseSha) fail('pull request changed during review');
+  }
   await responseJSON(fetcher, `${path}/reviews`, {
-    token, method: 'POST', body: { event: 'COMMENT', commit_id: headSha, body: `${body}\n\n${marker}` },
+    token, method: 'POST', body: { event: 'COMMENT', commit_id: headSha,
+      body: `${content.body}\n\n${marker}`,
+      ...(content.comments.length ? { comments: content.comments } : {}) },
   });
   return { alreadyPublished: false };
 }
