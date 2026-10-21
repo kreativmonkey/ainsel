@@ -221,6 +221,30 @@ mode restricts the model's capabilities rather than promising prompt injection
 immunity. The runtime itself retains credentials for its provider and hub and
 must remain trusted. This tool boundary is not an OS sandbox for arbitrary code.
 
+### GitHub App comment reviews
+
+Set `AINSEL_REVIEW_REPOS` to a comma-separated allowlist of public repositories
+to accept only an exact `/review` comment on an open pull request. This mode
+also requires `AINSEL_GITHUB_APP_ID`, `AINSEL_GITHUB_APP_SLUG`,
+`AINSEL_GITHUB_INSTALLATION_ID`, and a private key supplied through
+`AINSEL_GITHUB_APP_PRIVATE_KEY_FILE` (a mounted Secret) or
+`AINSEL_GITHUB_APP_PRIVATE_KEY` (a Secret-backed environment variable). Do not
+put the private key in a manifest or an AgentImage definition.
+Both `AINSEL_REVIEW_REPO` and `AINSEL_REVIEW_REPOS` may be set on one runtime:
+the former handles its existing `pull_request` stream, while the latter handles
+`issue_comment` commands. The two allowlists are checked independently.
+
+The App must be installed on the allowed repositories with `Contents: read`,
+`Issues: read`, and `Pull requests: write`. Enable its `issue_comment` webhook
+and route `created` comments to this Agent through a signed WebhookConnector.
+The runtime accepts commands only from users with write, maintain, or admin
+repository access; it rechecks the PR head before posting. The trusted runner
+submits the final assistant text as a GitHub `COMMENT` review under the App bot
+identity and detects retries by the command comment ID. It never approves,
+requests changes, merges, or pushes. Repository reads still use the public
+GitHub API and unauthenticated Git, so private repositories are not supported
+by this mode yet.
+
 Review mode uses `--no-builtin-tools` so Pi retains the extension tool in its
 registry. Pi 1.3.0 interprets `--no-tools` as an empty tool allowlist: later
 `setActiveTools` calls cannot restore filtered extension tools. A review task
