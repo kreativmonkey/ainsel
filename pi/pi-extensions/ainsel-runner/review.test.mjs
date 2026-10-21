@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createRepositoryReader, pullRequestContext, preparePullRequestWorkspace, registerReviewTool, reviewCompletionError, REVIEW_TOOL } from './review.mjs';
+import { createRepositoryReader, pullRequestContext, preparePullRequestWorkspace, registerReviewTool, reviewCompletionError, reviewReleaseSources, readGitHubRelease, REVIEW_TOOL } from './review.mjs';
 
 const execute = promisify(execFile);
 test('immutable repository reader supports full source and rejects credential/symlink escape', async () => {
@@ -44,6 +44,45 @@ test('review tool disables built-in and MCP execution and returns only scoped da
   for (const toolName of ['bash', 'read', 'write', 'mcp__forge__exec', 'mcp__http__fetch']) assert.equal(handlers.get('tool_call')({ toolName }).block, true);
   assert.equal(handlers.get('tool_call')({ toolName: REVIEW_TOOL }), undefined);
   assert.equal((await tool.execute('id', { operation: 'list' })).content[0].text, 'verified source');
+});
+
+test('release lookup reads only bounded public GitHub notes without credentials', async () => {
+  const requests = [];
+  const fetcher = async (url, options) => {
+    requests.push({ url, options });
+    assert.equal(new URL(url).hostname, 'api.github.com');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.headers.Authorization, undefined);
+    if (url.endsWith('/releases?per_page=30&page=1')) {
+      return Response.json([{ tag_name: 'v4.7.0', body: 'Upgrade notes', published_at: '2026-08-01' }]);
+    }
+    return Response.json({ tag_name: 'v4.7.0', name: 'v4.7.0', body: 'x'.repeat(16010), draft: false });
+  };
+  const list = JSON.parse(await readGitHubRelease({ operation: 'releases', repository: 'mastodon/mastodon' }, fetcher));
+  assert.equal(list.releases[0].url, 'https://github.com/mastodon/mastodon/releases/tag/v4.7.0');
+  const release = JSON.parse(await readGitHubRelease({ operation: 'release', repository: 'mastodon/mastodon', tag: 'v4.7.0' }, fetcher));
+  assert.equal(release.body.length, 16000);
+  assert.equal(release.nextOffset, 16000);
+  const remainder = JSON.parse(await readGitHubRelease({ operation: 'release', repository: 'mastodon/mastodon', tag: 'v4.7.0', offset: release.nextOffset }, fetcher));
+  assert.equal(remainder.body.length, 10);
+  assert.equal(remainder.nextOffset, null);
+  assert.equal(requests.length, 3);
+  await assert.rejects(readGitHubRelease({ operation: 'release', repository: '../evil', tag: 'v1' }, fetcher), /Invalid upstream/);
+  await assert.rejects(readGitHubRelease({ operation: 'release', repository: 'mastodon/mastodon', tag: '../evil' }, fetcher), /Invalid release tag/);
+  await assert.rejects(readGitHubRelease({ operation: 'releases', repository: 'mastodon/mastodon', page: 11 }, fetcher), /Invalid release page/);
+  await assert.rejects(readGitHubRelease({ operation: 'release', repository: 'mastodon/mastodon', tag: 'v1' }, async () => new Response('x'.repeat(256 * 1024 + 1))), /size limit/);
+  assert.deepEqual(reviewReleaseSources('ghcr.io/mastodon/mastodon=mastodon/mastodon'), { 'ghcr.io/mastodon/mastodon': 'mastodon/mastodon' });
+  assert.throws(() => reviewReleaseSources('ghcr.io/mastodon/mastodon=../evil'), /Invalid upstream release source mapping/);
+});
+
+test('release lookup stays inside the scoped review tool and does not replace source inspection', async () => {
+  let tool; let completed = 0;
+  registerReviewTool({ registerTool: t => tool = t, on() {} }, () => async () => 'verified source', () => completed++, async () => '{"body":"upgrade notes"}');
+  const result = await tool.execute('id', { operation: 'release', repository: 'mastodon/mastodon', tag: 'v4.7.0' });
+  assert.match(result.content[0].text, /upgrade notes/);
+  assert.equal(completed, 0);
+  await tool.execute('id', { operation: 'list' });
+  assert.equal(completed, 1);
 });
 
 test('PR context uses canonical unauthenticated API, bounds data and pins revisions', async () => {

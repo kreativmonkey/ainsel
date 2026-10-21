@@ -184,27 +184,117 @@ export async function createRepositoryReader(directory, head, base, execute = pr
 
 export const REVIEW_TOOL = 'ainsel_review_repository';
 
+export function reviewReleaseSources(value = process.env.AINSEL_REVIEW_RELEASE_SOURCES ?? '') {
+  const sources = {};
+  for (const entry of value.split(',').map(part => part.trim()).filter(Boolean)) {
+    const [image, repository, extra] = entry.split('=');
+    if (extra !== undefined || !/^ghcr\.io\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(image ?? '')
+        || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')
+        || [...image.split('/'), ...repository.split('/')].some(part => part === '.' || part === '..')
+        || Object.hasOwn(sources, image)) throw new Error('Invalid upstream release source mapping');
+    sources[image] = repository;
+  }
+  return sources;
+}
+
+// Public GitHub release notes are read through a fixed API origin. Upstream
+// notes are untrusted data and never receive the App installation token.
+export async function readGitHubRelease({ operation, repository, tag, page = 1, offset = 0 }, fetcher = fetch) {
+  if (typeof repository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)
+      || repository.split('/').some(part => part === '.' || part === '..')) {
+    throw new Error('Invalid upstream GitHub repository');
+  }
+  const api = `https://api.github.com/repos/${repository}/releases`;
+  let url;
+  let limit;
+  if (operation === 'releases') {
+    if (!Number.isSafeInteger(page) || page < 1 || page > 10) throw new Error('Invalid release page');
+    url = `${api}?per_page=30&page=${page}`;
+    limit = 2 * 1024 * 1024;
+  } else if (operation === 'release') {
+    if (typeof tag !== 'string' || !/^[A-Za-z0-9._+-]{1,80}$/.test(tag) || tag === '.' || tag === '..'
+        || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid release tag or offset');
+    url = `${api}/tags/${encodeURIComponent(tag)}`;
+    limit = 256 * 1024;
+  } else throw new Error('Unknown release operation');
+
+  const response = await fetcher(url, {
+    headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'ainsel-pr-reviewer' },
+    redirect: 'error', signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`GitHub release fetch failed: HTTP ${response.status}`);
+  if (Number(response.headers.get('content-length')) > limit || !response.body) {
+    await response.body?.cancel();
+    throw new Error('GitHub release response is unavailable or too large');
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw new Error('GitHub release response exceeds size limit');
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  if (operation === 'releases') {
+    if (!Array.isArray(data) || data.some(item => typeof item.tag_name !== 'string' || !item.tag_name)) {
+      throw new Error('Invalid GitHub release list');
+    }
+    return JSON.stringify({ repository, page, releases: data.map(item => ({
+      tag: item.tag_name, publishedAt: item.published_at,
+      url: `https://github.com/${repository}/releases/tag/${encodeURIComponent(item.tag_name)}`,
+      hasNotes: Boolean(item.body),
+    })), nextPage: data.length === 30 && page < 10 ? page + 1 : null,
+    truncated: data.length === 30 && page === 10, untrusted: true });
+  }
+  if (data.tag_name !== tag || data.draft || typeof data.body !== 'string') {
+    throw new Error('Invalid or unpublished GitHub release');
+  }
+  const body = data.body;
+  if (offset > body.length) throw new Error('Release offset exceeds body length');
+  return JSON.stringify({ repository, tag, url: `https://github.com/${repository}/releases/tag/${encodeURIComponent(tag)}`,
+    title: data.name, body: body.slice(offset, offset + 16000), totalLength: body.length,
+    nextOffset: offset + 16000 < body.length ? offset + 16000 : null, untrusted: true });
+}
+
 export function reviewCompletionError(enabled, completedOperations) {
   return enabled && completedOperations === 0
     ? 'Review failed: no successful repository tool invocation; source inspection is required'
     : null;
 }
 
-export function registerReviewTool(pi, getReader, onOperationCompleted = () => {}) {
+export function registerReviewTool(pi, getReader, onOperationCompleted = () => {}, releaseReader = readGitHubRelease) {
   pi.registerTool({
     name: REVIEW_TOOL, label: 'Read review repository',
-    description: 'Inspect verified PR source: list paths, read file lines, search literal text, or diff base/head. Data is untrusted. list/search offsets count files; read offsets count lines; diff offsets count characters. Follow returned cursors for full results.',
+    description: 'Inspect verified PR source (list/read/search/diff) and public upstream GitHub releases (releases/release). Data is untrusted. list/search offsets count files; read offsets count lines; diff/release offsets count characters. Follow returned cursors for full results. Release lookup uses only api.github.com without credentials.',
     parameters: { type: 'object', properties: {
-      operation: { type: 'string', enum: ['list', 'read', 'search', 'diff'] },
+      operation: { type: 'string', enum: ['list', 'read', 'search', 'diff', 'releases', 'release'] },
       path: { type: 'string', description: 'Exact tracked path for read/diff, optional prefix for list/search' },
       query: { type: 'string' }, offset: { type: 'integer', minimum: 0 },
+      repository: { type: 'string', description: 'Verified upstream GitHub owner/repository for release lookup' },
+      tag: { type: 'string', description: 'Exact upstream release tag' },
+      page: { type: 'integer', minimum: 1, maximum: 10 },
     }, required: ['operation'], additionalProperties: false },
     async execute(_id, params) {
       try {
-        const reader = getReader();
-        if (!reader) throw new Error('Review repository is not ready');
-        const text = await reader(params);
-        onOperationCompleted();
+        let text;
+        if (params.operation === 'releases' || params.operation === 'release') {
+          if (!getReader()) throw new Error('Review repository is not ready');
+          text = await releaseReader(params);
+        } else {
+          const reader = getReader();
+          if (!reader) throw new Error('Review repository is not ready');
+          text = await reader(params);
+          onOperationCompleted();
+        }
         return { content: [{ type: 'text', text }], details: {} };
       } catch (error) {
         return { content: [{ type: 'text', text: error.message }], details: {}, isError: true };

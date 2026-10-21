@@ -238,6 +238,17 @@ Both `AINSEL_REVIEW_REPO` and `AINSEL_REVIEW_REPOS` may be set on one runtime:
 the former handles its existing `pull_request` stream, while the latter handles
 `issue_comment` commands. The two allowlists are checked independently.
 
+For application and dependency updates, the reviewer can list and read public
+GitHub releases from a fixed API host. It should inspect the target release and
+skipped versions, compare upgrade instructions with the PR, and cite the release
+URLs. Set `AINSEL_REVIEW_RELEASE_SOURCES` to explicit image-to-upstream mappings
+when the image's source is known, for example
+`ghcr.io/mastodon/mastodon=mastodon/mastodon,ghcr.io/mastodon/mastodon-streaming=mastodon/mastodon`.
+An image name alone does not establish its upstream source. GitHub tags without
+release objects and changelogs hosted elsewhere are not available through this
+reader; the review must state that limitation instead of giving a confident
+merge recommendation. Upstream notes are untrusted data and receive no App token.
+
 The App must be installed on the allowed repositories with `Contents: read`,
 `Issues: read`, and `Pull requests: write`. Enable its `issue_comment` webhook
 and route `created` comments to this Agent through a signed WebhookConnector.
