@@ -22,6 +22,7 @@
             corepack
             kubernetes-helm
             kubectl
+            kubelogin-oidc
             gnumake
             nginx
             shellcheck
