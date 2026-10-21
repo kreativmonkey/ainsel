@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +35,7 @@ type User struct {
 type Config struct {
 	Issuer          string        // OIDC issuer URL (matches `iss` claim)
 	Audience        string        // Expected token audience (`aud`)
-	RolesClaim      string        // Optional claim name or dotted path; defaults to the legacy Zitadel claim
+	RolesClaim      string        // Optional claim name or dotted path; defaults to "groups"
 	SigningAlgs     []string      // Allowed asymmetric JWT algorithms; nil defaults to RS256
 	JWKSURL         string        // JWKS endpoint (from OIDC discovery; required)
 	UserInfoURL     string        // Optional: userinfo endpoint for enriched claims
@@ -42,9 +43,14 @@ type Config struct {
 	WWWAuthenticate string        // Optional; emitted on 401 responses.
 }
 
+// defaultRolesClaim is the role claim read when none is configured: a
+// top-level string array, the shape most providers emit for groups.
+const defaultRolesClaim = "groups"
+
 // zitadelRolesClaim is the claim Zitadel uses to assert project roles. The
 // value is an object whose keys are role names (the values, per-org assertions,
-// are ignored here).
+// are ignored here). FromEnvironment selects it only for legacy Zitadel
+// configurations.
 const zitadelRolesClaim = "urn:zitadel:iam:org:project:roles"
 
 // ErrUserInfoSubjectMismatch means UserInfo did not describe the authenticated
@@ -403,7 +409,7 @@ func userFromClaims(c jwt.MapClaims, rolesClaim string) *User {
 		Username: username,
 	}
 	if rolesClaim == "" {
-		rolesClaim = zitadelRolesClaim
+		rolesClaim = defaultRolesClaim
 	}
 	switch raw := roleClaim(c, rolesClaim).(type) {
 	case []any:
@@ -418,6 +424,8 @@ func userFromClaims(c jwt.MapClaims, rolesClaim string) *User {
 		for role := range raw {
 			u.Roles = append(u.Roles, role)
 		}
+		// Map iteration order is random; keep Roles stable for consumers and logs.
+		slices.Sort(u.Roles)
 	}
 	return u
 }

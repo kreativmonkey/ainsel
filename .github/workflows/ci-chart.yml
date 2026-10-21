@@ -8,6 +8,7 @@ on:
       - 'operators/agent/config/crd/bases/**'
       - 'operators/event-gateway/config/crd/bases/**'
       - 'scripts/check-crd-sync.py'
+      - 'scripts/test-chart-ingress.py'
       - '.github/workflows/ci-chart.yml'
   pull_request:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - 'operators/agent/config/crd/bases/**'
       - 'operators/event-gateway/config/crd/bases/**'
       - 'scripts/check-crd-sync.py'
+      - 'scripts/test-chart-ingress.py'
       - '.github/workflows/ci-chart.yml'
   workflow_dispatch:
 
@@ -36,6 +38,8 @@ jobs:
         run: helm template chart/ > manifest-default.yaml
       - name: Helm template (example values)
         run: helm template chart/ -f chart/values-example.yaml > manifest-example.yaml
+      - name: Ingress golden-file tests (nginx and non-nginx controllers)
+        run: python3 scripts/test-chart-ingress.py
       - name: Install kubeconform
         run: |
           KUBECONFORM_VERSION=v0.6.7

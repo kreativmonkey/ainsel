@@ -76,8 +76,14 @@ filter = '''
 // credentials (generic-password / generic-credential-uri hits) that are
 // never real secrets; suppress them instead of .betterleaksignore, whose
 // entries are digests of weak secret bytes and thus offline-guessable.
+// Documentation markdown under a docs/ directory is in the same class: the
+// request/response examples there carry placeholder credentials (e.g. the
+// "alice"/"secret123" pair in services/hub/docs/api.md) that read as
+// generic-password hits. Markdown outside docs/ is still scanned, so a
+// secret pasted into a README or a design note is not silenced.
 || attributes["path"] matches `(?:^|/)[\w.-]+_test\.go$`
 || attributes["path"] matches `(?:^|/)[\w.-]+\.test\.(?:tsx?|jsx?)$`
+|| attributes["path"] matches `(?:^|/)docs/[\w./-]*\.mdx?$`
 || finding["secret"] in ["pass", "pw", "invalid", "ainsel_abc123..."]
 
 '''

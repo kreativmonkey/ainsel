@@ -88,6 +88,10 @@ func TestTokensSummary_ReturnsCurrentAndPriorWindowTotals(t *testing.T) {
 	if body.CostUSD != 1.25 {
 		t.Errorf("cost wrong: %v", body.CostUSD)
 	}
+	// Series exist for cache and cost, so the window is "reported" (issue #75).
+	if !body.CacheReported || !body.CostReported {
+		t.Errorf("presence flags = %v/%v, want true/true", body.CacheReported, body.CostReported)
+	}
 	if body.UpdatedAt.IsZero() {
 		t.Error("expected updatedAt to be populated")
 	}
@@ -117,6 +121,64 @@ func TestTokensSummary_HandlesEmptyResults(t *testing.T) {
 	}
 	if body.CacheReadTokens != 0 || body.CacheWriteTokens != 0 {
 		t.Errorf("expected zero cache components, got %+v", body)
+	}
+	// No series at all means nothing was reported (issue #75): the zeros above
+	// are placeholders, and the flags must say so rather than let the UI
+	// render a measured-looking 0% / $0.00.
+	if body.CacheReported {
+		t.Errorf("cacheReported = true, want false (no cache series)")
+	}
+	if body.CostReported {
+		t.Errorf("costReported = true, want false (no cost series: unpriced models)")
+	}
+}
+
+func TestTokensSummary_ReportedZerosKeepPresence(t *testing.T) {
+	// Issue #75: a series that exists with value 0 is a measurement, not an
+	// absence. A provider reporting cached_tokens: 0 has a real 0% hit rate,
+	// and a priced model on a free run really costs $0 — both must keep
+	// cacheReported/costReported true so the UI renders the zeros as measured.
+	srv := fakePromServer(t, func(path string, params url.Values) interface{} {
+		q := params.Get("query")
+		switch {
+		case strings.Contains(q, "offset 24h"):
+			return vectorResponse(nil)
+		case strings.Contains(q, "sum by (token_type)"):
+			return vectorResponse([]vectorSample{
+				{Labels: map[string]string{"token_type": "input"}, Value: "100"},
+				{Labels: map[string]string{"token_type": "output"}, Value: "20"},
+				{Labels: map[string]string{"token_type": "cache_read"}, Value: "0"},
+				{Labels: map[string]string{"token_type": "cache_write"}, Value: "0"},
+			})
+		case strings.Contains(q, "agent_cost_usd_total"):
+			return vectorResponse([]vectorSample{{Labels: map[string]string{}, Value: "0"}})
+		}
+		t.Fatalf("unexpected query: %s", q)
+		return nil
+	})
+	defer srv.Close()
+
+	s := newServerWithTokensProm(t, prometheus.NewClient(srv.URL, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/metrics/tokens/summary", nil)
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body TokensSummary
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.CacheReported {
+		t.Errorf("cacheReported = false, want true (0-valued cache series is a measured 0%%)")
+	}
+	if !body.CostReported {
+		t.Errorf("costReported = false, want true (0-valued cost series is a measured $0)")
+	}
+	if body.TotalTokens != 120 {
+		t.Errorf("totalTokens = %v, want 120", body.TotalTokens)
 	}
 }
 
@@ -372,13 +434,22 @@ func TestTokensBySubject_AggregatesRows(t *testing.T) {
 	if developer.TotalTokens != 72000 {
 		t.Errorf("developer total must include cache_read, got %v", developer.TotalTokens)
 	}
-	// Cost rides its own series; the architect's model raised none, so its
-	// row reads 0 — the same figure pi reports for an unpriced model.
+	// Cost rides its own series; the architect's model raised none, so its row
+	// reads costReported false — "not reported", not a measured $0 (issue #75).
 	if developer.CostUSD != 0.42 {
 		t.Errorf("developer cost wrong: got %v", developer.CostUSD)
 	}
 	if architect.CostUSD != 0 {
 		t.Errorf("architect cost should be 0 without a series, got %v", architect.CostUSD)
+	}
+	if !developer.CacheReported || !developer.CostReported {
+		t.Errorf("developer presence = %v/%v, want true/true", developer.CacheReported, developer.CostReported)
+	}
+	if !architect.CacheReported {
+		t.Errorf("architect cacheReported = false, want true (cache_write series exists)")
+	}
+	if architect.CostReported {
+		t.Errorf("architect costReported = true, want false (no cost series for its group)")
 	}
 }
 

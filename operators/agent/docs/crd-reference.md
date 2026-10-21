@@ -16,9 +16,9 @@
 | `forgejo.email` | string | Yes | Forgejo email for the agent |
 | `runtime.image` | string | Yes | Container image for ainsel-ai-agent |
 | `runtime.imagePullPolicy` | string | No | Image pull policy (default: IfNotPresent) |
-| `runtime.provider` | string | Yes | LLM provider (`claude` or `mistral`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits |
-| `llm.model` | string | Yes | LLM model name |
+| `llm.model` | string | Yes | LLM model name. No default: the runtime refuses to start without a model (issue #96) |
+| `llm.provider` | string | Pi: yes (no schema default) | LLM provider backend. Enum: `ollama-cloud`, `opencode`, `alibaba-cloud`, `custom`, `openai-codex`. `openai-codex` requires a Pi subscription; native Codex/Claude runtimes use their own CLI authentication. Unknown values are rejected by the API server; an unset provider on Pi fails reconciliation with `Ready=False` / `InvalidLLMProvider` |
 | `llm.maxTurns` | int | No | Maximum tool-use loop turns |
 | `llm.temperature` | float64 | No | LLM temperature |
 | `llm.vision` | bool | No | Whether pi sends image input (pi attaches screenshots/images only when true; the endpoint is never probed). Default false |
@@ -30,6 +30,14 @@
 | `scaling.replicas` | int32 | No | Pod count in static mode, ceiling in queue mode. Default `1`. |
 | `memory.enabled` | bool | No | Enable shared memory |
 | `memory.provider` | string | No | Memory provider |
+| `ollamaCloud.apiKeySecretRef` | SecretKeySelector | No | Secret containing the Ollama Cloud API key (key: `api-key`). Used when `llm.provider` is `ollama-cloud` |
+| `ollamaCloud.baseUrl` | string | No | Override for the Ollama Cloud API base URL (default `https://ollama.com/v1`). Written to the generated models.json; the endpoint is never probed |
+| `openCode.apiKeySecretRef` | SecretKeySelector | No | Secret containing the OpenCode API key (key: `api-key`). Used when `llm.provider` is `opencode` |
+| `openCode.baseUrl` | string | No | Override for the OpenCode API base URL (default `https://opencode.ai/zen/go/v1`) |
+| `alibabaCloud.apiKeySecretRef` | SecretKeySelector | No | Secret containing the Alibaba Token Plan API key (key: `api-key`). Used when `llm.provider` is `alibaba-cloud` |
+| `alibabaCloud.baseUrl` | string | No | Override for the Alibaba base URL — e.g. a different MaaS region than the built-in `ap-southeast-1` endpoint |
+| `customProvider.url` | string | No | Base URL of a custom OpenAI-compatible LLM API. Required when `llm.provider` is `custom` |
+| `customProvider.apiKeySecretRef` | SecretKeySelector | No | Secret containing the custom provider API key (key: `api-key`) |
 
 ### Status Fields
 
@@ -59,8 +67,7 @@ spec:
     username: code-reviewer
     email: code-reviewer@ainsel.dev
   runtime:
-    image: localhost:30500/ainsel/ainsel-ai-agent:latest
-    provider: claude
+    image: registry.example.com/ainsel/ainsel-ai-agent:latest
     resources:
       requests:
         cpu: 100m
@@ -69,7 +76,8 @@ spec:
         cpu: 500m
         memory: 512Mi
   llm:
-    model: claude-sonnet-4-20250514
+    model: glm-5.1:cloud
+    provider: ollama-cloud
     maxTurns: 10
     temperature: 0.3
   persona:

@@ -41,12 +41,15 @@ Note: `-n` must match the chart's `namespace` value (both `ainsel` above).
 | _(empty)_ | legacy behavior: OIDC if configured, else auto no-auth when nothing is exposed | derived | upgrading existing installs |
 | `none`  | no auth middleware         | "no auth" indicator   | port-forward or behind an edge auth proxy |
 | `local` | username/password accounts, admin bootstrapped from a Secret | login form | exposed installs without an IdP (`values-local.yaml`) |
+| `oidc+local` | OIDC and local accounts chained: local JWTs verified by the hub, everything else by the IdP | login chooser (SSO button + form) | gradual SSO migration or a break-glass local admin next to SSO |
 | `oidc`  | external OIDC provider     | IdP redirect flow     | organization SSO (`values-example.yaml`) |
 
-In `local` mode the chart generates `ainsel-local-admin` (bootstrap admin
-password) and `ainsel-local-jwt` (signing key) Secrets unless you point
-`auth.local.adminPasswordSecret` / `auth.local.jwtSecretSecret` at your own.
-Users are managed via **Admin → Users** in the UI or the `/api/v1/users` API.
+In `local` and `oidc+local` mode the chart generates `ainsel-local-admin`
+(bootstrap admin password) and `ainsel-local-jwt` (signing key) Secrets
+unless you point `auth.local.adminPasswordSecret` / `auth.local.jwtSecretSecret`
+at your own. Users are managed via **Admin → Users** in the UI or the
+`/api/v1/users` API. `oidc+local` bootstraps the local admin too — delete it
+via **Admin → Users** if you want SSO-only identities despite the mode.
 
 Lint and render locally:
 
@@ -119,7 +122,9 @@ data volume and retention requirements.
 - **Auth:** `auth.mode` selects the authentication mode (see Authentication
   modes above). `oidc` requires a complete OIDC configuration; `local` shows a
   login form in the UI and bootstraps the admin credentials from chart-generated
-  Secrets; `none` (and the auto-detected local mode of a quickstart install)
+  Secrets; `oidc+local` requires both halves (OIDC config **and** the local
+  Secrets) and shows a login chooser offering SSO and the local form; `none`
+  (and the auto-detected local mode of a quickstart install)
   runs the hub without auth middleware and the UI shows a no-auth indicator —
   only safe when nothing is exposed outside the cluster or an edge auth proxy
   sits in front of the ingress.
@@ -159,7 +164,7 @@ listed:
 
 | Key | Default | Purpose |
 |---|---|----|
-| [`auth.mode`](docs/configuration.md#auth) | `""` (legacy) | Authentication mode: `oidc` / `local` / `none` |
+| [`auth.mode`](docs/configuration.md#auth) | `""` (legacy) | Authentication mode: `oidc` / `local` / `oidc+local` / `none` |
 | [`auth.allowInsecureNoAuth`](docs/configuration.md#auth) | `false` | Run hub without auth middleware — local/air-gapped testing only |
 | [`auth.internalValidateSecret` / `auth.skillsMcpToken`](docs/configuration.md#auth) | `""` (feature off) | Internal credentials; keep them deliberately separate |
 | [`networkPolicy.enabled`](docs/configuration.md#networkpolicy) | `true` | Default-deny ingress; requires a policy-enforcing CNI |

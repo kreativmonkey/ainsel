@@ -202,6 +202,135 @@ describe('AuthProvider (local mode)', () => {
   })
 })
 
+describe('AuthProvider (oidc+local coexistence mode)', () => {
+  const COEXIST_CFG: ResolvedConfig = {
+    authMode: 'oidc+local',
+    oidcIssuer: 'https://oidc.example.com',
+    oidcClientId: 'test-client',
+  }
+
+  function seedLocalSession(expiresAt = new Date(Date.now() + 60_000).toISOString()) {
+    localStorage.setItem('ainsel.local.token', 'local-tok')
+    localStorage.setItem('ainsel.local.user', JSON.stringify({ sub: 'local:bob', username: 'bob', isAdmin: false }))
+    localStorage.setItem('ainsel.local.expiresAt', expiresAt)
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    setUnauthorizedHandler(null)
+    mockOidc = {
+      user: null,
+      isLoading: false,
+      signinSilent: vi.fn().mockResolvedValue(null),
+      signinRedirect: vi.fn().mockResolvedValue(undefined),
+      signoutRedirect: vi.fn().mockResolvedValue(undefined),
+    }
+  })
+
+  it('prefers the marked local session over a live OIDC user', () => {
+    // The explicit local login is the act the user just performed; the
+    // single-active-method marker keeps exactly one token in the client.
+    seedLocalSession()
+    localStorage.setItem('ainsel.activeMethod', 'local')
+    mockOidc.user = mockUser()
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    expect(result.current.token).toBe('local-tok')
+    expect(result.current.user?.username).toBe('bob')
+    expect(result.current.mode).toBe('oidc+local')
+  })
+
+  it('falls back to the OIDC user when the marked local session is expired', () => {
+    seedLocalSession(new Date(Date.now() - 1000).toISOString())
+    localStorage.setItem('ainsel.activeMethod', 'local')
+    mockOidc.user = mockUser()
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    expect(result.current.token).toBe('tok-123')
+    expect(result.current.user?.sub).toBe('user-1')
+  })
+
+  it('uses the local session when marked oidc but no OIDC user is present', () => {
+    seedLocalSession()
+    localStorage.setItem('ainsel.activeMethod', 'oidc')
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    expect(result.current.token).toBe('local-tok')
+  })
+
+  it('local login stores the session and marks the method local', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            token: 'fresh-tok',
+            expiresAt: '2030-01-01T00:00:00Z',
+            user: { sub: 'local:admin', username: 'admin', isAdmin: true },
+          }),
+          { status: 200 },
+        ),
+      ),
+    )
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    await act(async () => {
+      await result.current.login('admin', 'secret123')
+    })
+    expect(result.current.token).toBe('fresh-tok')
+    expect(localStorage.getItem('ainsel.activeMethod')).toBe('local')
+    vi.unstubAllGlobals()
+  })
+
+  it('logout clears both namespaces and signs out the IdP when a user exists', () => {
+    seedLocalSession()
+    localStorage.setItem('ainsel.activeMethod', 'local')
+    mockOidc.user = mockUser()
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    act(() => result.current.logout())
+    expect(localStorage.getItem('ainsel.local.token')).toBeNull()
+    expect(localStorage.getItem('ainsel.activeMethod')).toBeNull()
+    expect(mockOidc.signoutRedirect).toHaveBeenCalledTimes(1)
+  })
+
+  it('on 401 with the local method active, drops the local session without touching the IdP', async () => {
+    seedLocalSession()
+    localStorage.setItem('ainsel.activeMethod', 'local')
+    mockOidc.user = mockUser()
+    seedConfig(COEXIST_CFG)
+    const { result, rerender } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    await act(async () => {
+      await triggerUnauthorized()
+    })
+    expect(localStorage.getItem('ainsel.local.token')).toBeNull()
+    expect(mockOidc.signinSilent).not.toHaveBeenCalled()
+    expect(mockOidc.signinRedirect).not.toHaveBeenCalled()
+    rerender()
+    // The healthy OIDC session takes over (marker preference, not truth).
+    expect(result.current.token).toBe('tok-123')
+  })
+
+  it('on 401 with the OIDC method active, recovers via the IdP and keeps the local session', async () => {
+    seedLocalSession()
+    localStorage.setItem('ainsel.activeMethod', 'oidc')
+    mockOidc.user = mockUser({ refresh_token: 'rt-1' })
+    seedConfig(COEXIST_CFG)
+    renderHook(() => useAuth(), { wrapper: Wrapper })
+    await triggerUnauthorized()
+    expect(mockOidc.signinSilent).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('ainsel.local.token')).toBe('local-tok')
+  })
+
+  it('signinRedirect marks the method oidc', () => {
+    seedConfig(COEXIST_CFG)
+    const { result } = renderHook(() => useAuth(), { wrapper: Wrapper })
+    act(() => result.current.signinRedirect())
+    expect(localStorage.getItem('ainsel.activeMethod')).toBe('oidc')
+    expect(mockOidc.signinRedirect).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('OIDC provider configuration', () => {
   it('uses standard scopes without a vendor project ID', () => {
     seedConfig({ authMode: 'oidc', oidcIssuer: 'https://idp.test/application/o/app/', oidcClientId: 'app' })

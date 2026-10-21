@@ -131,17 +131,23 @@ spec:
                   name: {{ .Values.postgres.auth.existingSecret | default "ainsel-hub-db" }}
                   key: dsn
             {{- $authMode := .Values.auth.mode | default "" }}
-            {{- if not (or (eq $authMode "") (eq $authMode "oidc") (eq $authMode "local") (eq $authMode "none")) }}
-            {{- fail (printf "auth.mode must be one of oidc, local, none (got %q)" $authMode) }}
+            {{- if not (or (eq $authMode "") (eq $authMode "oidc") (eq $authMode "local") (eq $authMode "oidc+local") (eq $authMode "none")) }}
+            {{- fail (printf "auth.mode must be one of oidc, local, oidc+local, none (got %q)" $authMode) }}
             {{- end }}
             {{- if and (eq $authMode "oidc") (not .Values.auth.oidcIssuer) }}
             {{- fail "auth.mode=oidc requires auth.oidcIssuer and an audience/client ID" }}
+            {{- end }}
+            {{- if and (eq $authMode "oidc+local") (not .Values.auth.oidcIssuer) }}
+            {{- fail "auth.mode=oidc+local requires auth.oidcIssuer and an audience/client ID" }}
+            {{- end }}
+            {{- if and .Values.ui.enabled (or (eq $authMode "oidc") (eq $authMode "oidc+local") (and (eq $authMode "") .Values.auth.oidcIssuer)) (not .Values.auth.oidcClientId) }}
+            {{- fail "OIDC frontend requires auth.oidcClientId" }}
             {{- end }}
             {{- if $authMode }}
             - name: HUB_AUTH_MODE
               value: {{ $authMode | quote }}
             {{- end }}
-            {{- if eq $authMode "local" }}
+            {{- if or (eq $authMode "local") (eq $authMode "oidc+local") }}
             - name: HUB_LOCAL_ADMIN_USER
               value: {{ .Values.auth.local.adminUser | quote }}
             - name: HUB_LOCAL_ADMIN_PASSWORD
@@ -154,7 +160,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth.local.jwtSecretSecret | default "ainsel-local-jwt" }}
                   key: secret
-            {{- else }}
+            {{- end }}
             {{- if .Values.auth.oidcIssuer }}
             - name: OIDC_ISSUER
               value: {{ .Values.auth.oidcIssuer | quote }}
@@ -167,16 +173,17 @@ spec:
             - name: OIDC_AUDIENCE
               value: {{ $audience | quote }}
             {{- end }}
+            {{- if not (eq $authMode "local") }}
             - name: OIDC_SIGNING_ALGS
               value: {{ .Values.auth.oidcSigningAlgs | quote }}
-            {{- if .Values.auth.oidcRolesClaim }}
+            {{- end }}
+            {{- with include "ainsel.oidcRolesClaim" . }}
             - name: OIDC_ROLES_CLAIM
-              value: {{ .Values.auth.oidcRolesClaim | quote }}
+              value: {{ . | quote }}
             {{- end }}
             {{- if or (eq $authMode "none") (and (not $authMode) (not .Values.auth.oidcIssuer) (or .Values.auth.allowInsecureNoAuth (include "ainsel.localMode" .))) }}
             - name: HUB_ALLOW_INSECURE_NO_AUTH
               value: "true"
-            {{- end }}
             {{- end }}
             {{- if .Values.auth.internalValidateSecret }}
             - name: HUB_INTERNAL_VALIDATE_SECRET

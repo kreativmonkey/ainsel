@@ -163,6 +163,18 @@ of rows inside that bucket. The console derives its axis label from `source` and
 window older than the retention reports zero rather than the history a counter
 would still remember.
 
+Cache and cost figures carry a second distinction, marked by `cacheReported` /
+`costReported` flags on the token responses: *not reported* is not the same fact
+as *measured zero*. A provider without prompt caching reports no cache figure at
+all, and a model without a `spec.llm.cost` block reports no cost — the runtime
+then omits the fields (the hub stores NULL, and raises no `agent_cost_usd_total`
+series), and the console renders those tiles and cells as "not reported" instead
+of a real-looking `0%` hit rate or `$0.00`. A reported zero — a provider that
+genuinely reports `cached_tokens: 0`, a priced model on a free run — keeps its
+flag true and renders as the measured zero it is. Rows written before migration
+0025 stored ambiguous zeros; the migration backfills them to NULL, so those rows
+read as not reported too.
+
 To have Prometheus scrape the hub's own `/metrics` endpoint, enable the ServiceMonitor or PodMonitor resources in `values.yaml`. This is independent of `metricsSource`: the hub exports these counters whether or not it also reads them back.
 
 ```yaml

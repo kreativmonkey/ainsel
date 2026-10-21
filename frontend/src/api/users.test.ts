@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { userDisplayName, isUnsyncedUser } from './users'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { userDisplayName, isUnsyncedUser, updateUser } from './users'
 
 describe('userDisplayName', () => {
   it('returns username when it differs from id', () => {
@@ -42,5 +42,36 @@ describe('isUnsyncedUser', () => {
 
   it('returns true when username equals id and email is empty', () => {
     expect(isUnsyncedUser({ id: '123', username: '123', email: '' })).toBe(true)
+  })
+})
+
+describe('updateUser', () => {
+  const mockFetch = () => globalThis.fetch as ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('PATCHes /users/{id} with the disabled flag', async () => {
+    mockFetch().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'u1', disabled: true }), { status: 200 }),
+    )
+    await updateUser('u1', { disabled: true })
+    const [url, opts] = mockFetch().mock.calls[0]
+    expect(url).toContain('/users/u1')
+    expect(opts.method).toBe('PATCH')
+    expect(JSON.parse(opts.body)).toEqual({ disabled: true })
+  })
+
+  it('PATCHes isAdmin and disabled together', async () => {
+    mockFetch().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'u1', disabled: true, isAdmin: false }), { status: 200 }),
+    )
+    await updateUser('u1', { isAdmin: false, disabled: true })
+    const [, opts] = mockFetch().mock.calls[0]
+    expect(JSON.parse(opts.body)).toEqual({ isAdmin: false, disabled: true })
   })
 })

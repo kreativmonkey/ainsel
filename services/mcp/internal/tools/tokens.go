@@ -17,9 +17,11 @@ import (
 // stub at the time of writing.
 //
 // Both pass the hub's JSON through verbatim, so they carry costUsd once
-// models are priced (spec.llm.cost, issue #281); agents on unpriced models
-// report zero cost. The token response also carries a source field naming the
-// backend that answered.
+// models are priced (spec.llm.cost, issue #281) and the cacheReported /
+// costReported presence flags alongside it: an agent on unpriced models
+// reports no cost at all, which the flags mark as "not reported" rather than
+// a measured zero (issue #75). The token response also carries a source field
+// naming the backend that answered.
 //
 // /api/v1/tokens supports agent, repository, issueNumber filters, and the
 // records path honours since/until (RFC 3339); the Prometheus path reads
@@ -38,7 +40,7 @@ func NewUsageTools(hubURL string) *UsageTools {
 
 func (t *UsageTools) GetTokenUsageTool() mcp.Tool {
 	return mcp.NewTool("get_token_usage",
-		mcp.WithDescription("Hub-aggregated token usage: counts per agent, repository, issue, and model, split into input, output, cacheRead and cacheWrite with a total, plus costUsd (USD, priced from each model's spec.llm.cost — 0 for unpriced models). Results capped at 50 rows."),
+		mcp.WithDescription("Hub-aggregated token usage: counts per agent, repository, issue, and model, split into input, output, cacheRead and cacheWrite with a total, plus costUsd (USD, priced from each model's spec.llm.cost; when costReported is false the model is unpriced and costUsd is not a measured zero). Results capped at 50 rows."),
 		mcp.WithString("agent", mcp.Description("Filter by agent name")),
 		mcp.WithString("repository", mcp.Description("Filter by repository")),
 		mcp.WithString("issueNumber", mcp.Description("Filter by issue number")),

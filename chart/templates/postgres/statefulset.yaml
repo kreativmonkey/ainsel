@@ -1,5 +1,17 @@
 {{- if .Values.postgres.enabled }}
 {{- $secretName := .Values.postgres.auth.existingSecret | default "ainsel-hub-db" }}
+{{- /* volumeClaimTemplates are immutable: an install created before
+     postgres.storageClassName existed keeps the class it was created with. */}}
+{{- $storageClass := .Values.postgres.storageClassName }}
+{{- if not $storageClass }}
+{{- with lookup "apps/v1" "StatefulSet" .Values.namespace "postgres" }}
+{{- range .spec.volumeClaimTemplates }}
+{{- if eq .metadata.name "data" }}
+{{- $storageClass = .spec.storageClassName | default "" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -112,7 +124,9 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: local-path
+        {{- with $storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.postgres.storage }}

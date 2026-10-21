@@ -31,13 +31,28 @@ startup. Tokens must be JWT access tokens; opaque-token introspection is
 not supported. Discovery must report the exact configured issuer, and
 userinfo must match the validated token's `sub` before claims are used.
 
-`OIDC_ROLES_CLAIM` defaults to `urn:zitadel:iam:org:project:roles` for existing
-Zitadel installations. Configure `groups` or a nested path such as
-`realm_access.roles` for other providers; exact claim keys take precedence
+`OIDC_ROLES_CLAIM` defaults to `groups`; installations configured through the
+legacy `ZITADEL_ISSUER` or `OIDC_PROJECT_ID` variables keep
+`urn:zitadel:iam:org:project:roles`. Configure a nested path such as
+`realm_access.roles` where your provider nests roles; exact claim keys take precedence
 over dotted paths. Roles are informational: hub database records determine
 permissions. `ZITADEL_ISSUER` and `OIDC_PROJECT_ID` remain aliases; neutral
 variables take precedence, and an unset audience falls back to the legacy
 project ID before the client ID.
+
+### Auth (local)
+
+With `HUB_AUTH_MODE=local` — or `oidc+local`, where it is the break-glass path
+alongside the IdP — the hub authenticates users against its own `users` table
+(argon2id password hashes) and issues stateless session JWTs.
+See the [API Reference](../../../docs/api-reference.md#local-authentication) for the
+login/password endpoints and for how password changes invalidate issued sessions.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HUB_LOCAL_JWT_SECRET` | _required_ | HS256 signing secret for local session JWTs. The hub refuses to start in local mode without it. Rotating it invalidates every session; it is not covered by token versioning — treat it like a credential. |
+| `HUB_LOCAL_ADMIN_USER` | `admin` | Username of the admin account bootstrapped on first start. |
+| `HUB_LOCAL_ADMIN_PASSWORD` | _(unset)_ | Password for the bootstrap admin. Used only while that account does not exist; ignored afterwards (change it via `PUT /api/v1/auth/password`). |
 
 ## Helm Values
 
@@ -46,7 +61,7 @@ When deployed via the ainsel-chart:
 ```yaml
 hub:
   image:
-    repository: localhost:30500/ainsel/ainsel-hub-backend
+    repository: registry.example.com/ainsel/ainsel-hub-backend
     tag: latest
   port: 8080
   metricsPort: 9090

@@ -96,3 +96,48 @@ func TestStoreUpsertKeepsLocalPassword(t *testing.T) {
 // Note: DeleteUser relies on ON DELETE CASCADE for the remaining FKs to
 // users (group_members, user_tokens); the legacy resource_ownership table
 // was dropped by migration 0016.
+
+// TestStoreTokenVersion covers the token_version column (issue #112):
+// SetPassword bumps it atomically with the hash write, BumpTokenVersion
+// increments it on its own, and both report missing users.
+func TestStoreTokenVersion(t *testing.T) {
+	env := newTestAuthZ(t)
+	defer env.cleanup()
+	ctx := context.Background()
+
+	if _, err := env.store.CreateLocalUser(ctx, "local:carol", "", "carol", "$argon2id$first", false); err != nil {
+		t.Fatalf("CreateLocalUser: %v", err)
+	}
+	v, err := env.store.UserTokenVersion(ctx, "local:carol")
+	if err != nil || v != 0 {
+		t.Fatalf("initial UserTokenVersion = %d, %v; want 0", v, err)
+	}
+
+	// SetPassword bumps exactly once per call, atomically with the hash.
+	if err := env.store.SetPassword(ctx, "local:carol", "$argon2id$second"); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	v, err = env.store.UserTokenVersion(ctx, "local:carol")
+	if err != nil || v != 1 {
+		t.Fatalf("after SetPassword UserTokenVersion = %d, %v; want 1", v, err)
+	}
+	if h, _ := env.store.UserPasswordHash(ctx, "local:carol"); h != "$argon2id$second" {
+		t.Fatalf("hash not written: %q", h)
+	}
+
+	// Standalone bump (sign-out-everywhere).
+	if err := env.store.BumpTokenVersion(ctx, "local:carol"); err != nil {
+		t.Fatalf("BumpTokenVersion: %v", err)
+	}
+	if v, err = env.store.UserTokenVersion(ctx, "local:carol"); err != nil || v != 2 {
+		t.Fatalf("after BumpTokenVersion UserTokenVersion = %d, %v; want 2", v, err)
+	}
+
+	// Missing user: both readers/writers report ErrNotFound.
+	if _, err := env.store.UserTokenVersion(ctx, "local:ghost"); !errors.Is(err, authz.ErrNotFound) {
+		t.Fatalf("UserTokenVersion(ghost): %v", err)
+	}
+	if err := env.store.BumpTokenVersion(ctx, "local:ghost"); !errors.Is(err, authz.ErrNotFound) {
+		t.Fatalf("BumpTokenVersion(ghost): %v", err)
+	}
+}

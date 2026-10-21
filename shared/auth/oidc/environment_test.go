@@ -12,7 +12,7 @@ func TestFromEnvironment(t *testing.T) {
 	}
 	t.Setenv("ZITADEL_ISSUER", "legacy")
 	t.Setenv("OIDC_PROJECT_ID", "project")
-	if cfg := oidc.FromEnvironment(); cfg.Issuer != "legacy" || cfg.Audience != "project" {
+	if cfg := oidc.FromEnvironment(); cfg.Issuer != "legacy" || cfg.Audience != "project" || cfg.RolesClaim != "urn:zitadel:iam:org:project:roles" {
 		t.Fatalf("legacy aliases: %+v", cfg)
 	}
 	t.Setenv("OIDC_ISSUER", "https://idp.test/application/o/app/")
@@ -26,5 +26,13 @@ func TestFromEnvironment(t *testing.T) {
 	t.Setenv("OIDC_CLIENT_ID", "client")
 	if cfg := oidc.FromEnvironment(); cfg.Audience != "client" {
 		t.Fatalf("client audience fallback: %+v", cfg)
+	}
+	t.Setenv("OIDC_ROLES_CLAIM", "")
+	if cfg := oidc.FromEnvironment(); cfg.RolesClaim != "" {
+		t.Fatalf("generic settings must not select the Zitadel roles claim: %+v", cfg)
+	}
+	t.Setenv("OIDC_PROJECT_ID", "project")
+	if cfg := oidc.FromEnvironment(); cfg.RolesClaim != "urn:zitadel:iam:org:project:roles" {
+		t.Fatalf("legacy project ID must keep the Zitadel roles claim: %+v", cfg)
 	}
 }

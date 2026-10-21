@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes, useNavigate } from 'react-router-dom'
-import { ImageDetail } from './ImageDetail'
+import { ImageDetailPage } from './ImageDetailPage'
 import { renderWithProviders } from '../../test/renderWithProviders'
 import type { AgentImageRequest } from '../../api/agentImages'
 
@@ -68,7 +68,7 @@ function defaultFetch(url: string, init?: RequestInit): Response {
   return new Response('{}', { status: 200 })
 }
 
-describe('ImageDetail', () => {
+describe('ImageDetailPage', () => {
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
@@ -82,7 +82,7 @@ describe('ImageDetail', () => {
   it('starts with default shell tools in new mode', async () => {
     const { container } = renderWithProviders(
       <Routes>
-        <Route path="/agent-images/new" element={<ImageDetail />} />
+        <Route path="/agent-images/new" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/new' },
     )
@@ -95,7 +95,7 @@ describe('ImageDetail', () => {
   it('loads existing tools in edit mode and shows the first by default', async () => {
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -107,7 +107,7 @@ describe('ImageDetail', () => {
   it('selecting a different tool updates the editor pane', async () => {
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -126,7 +126,7 @@ describe('ImageDetail', () => {
   it('re-selecting the first tool after selecting another updates the editor pane', async () => {
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -151,7 +151,7 @@ describe('ImageDetail', () => {
   it('confirm-delete navigates back to the list', async () => {
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
         <Route path="/agent-images" element={<div>LIST</div>} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
@@ -190,7 +190,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -221,7 +221,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/new" element={<ImageDetail />} />
+        <Route path="/agent-images/new" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/new' },
     )
@@ -265,7 +265,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -325,7 +325,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -370,7 +370,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/new" element={<ImageDetail />} />
+        <Route path="/agent-images/new" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/new' },
     )
@@ -423,7 +423,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -464,7 +464,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -511,7 +511,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -560,7 +560,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -613,7 +613,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -663,7 +663,7 @@ describe('ImageDetail', () => {
 
     const { queryClient } = renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -714,7 +714,7 @@ describe('ImageDetail', () => {
 
     renderWithProviders(
       <Routes>
-        <Route path="/agent-images/:id" element={<ImageDetail />} />
+        <Route path="/agent-images/:id" element={<ImageDetailPage />} />
       </Routes>,
       { route: '/agent-images/claude-tooling-base:1.4' },
     )
@@ -757,7 +757,7 @@ describe('ImageDetail', () => {
       return (
         <>
           <button onClick={() => navigate('/agent-images/other-image:2.0')}>Navigate</button>
-          <ImageDetail />
+          <ImageDetailPage />
         </>
       )
     }

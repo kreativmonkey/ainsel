@@ -105,8 +105,9 @@ and a public authorization-code client with PKCE for interactive login.
 `RS256/384/512`, `PS256/384/512`, `ES256/384/512`, and `EdDSA` supported.
 `HS*`, `none`, and unknown algorithms fail startup; opaque-token
 introspection is not supported. Userinfo claims require a matching `sub`.
-`OIDC_ROLES_CLAIM` defaults to `urn:zitadel:iam:org:project:roles`; configure
-`groups` or a nested path such as `realm_access.roles` for other providers.
+`OIDC_ROLES_CLAIM` defaults to `groups` (legacy Zitadel variables keep
+`urn:zitadel:iam:org:project:roles`); configure a nested path such as
+`realm_access.roles` where your provider nests roles.
 Exact keys take precedence over dotted paths, and roles are informational.
 The legacy `ZITADEL_ISSUER` / `OIDC_PROJECT_ID` aliases remain supported;
 audience fallback prefers the project ID over the client ID. See the

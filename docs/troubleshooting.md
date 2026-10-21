@@ -135,8 +135,9 @@ kubectl logs -n <namespace> job/<task-job> -c chat --tail=20
 
 If the hub fails to start with `authMW is nil` / `api auth middleware is not
 configured`, no authentication is wired and the operator has not opted into
-running without auth. Configure `auth.mode` (`oidc`, `local`, or `none`) in
-your values — see `docs/deployment.md`. The chart auto-enables no-auth only
+running without auth. Configure `auth.mode` (`oidc`, `local`, `oidc+local`, or
+`none`) in your values — see `docs/deployment.md`. The chart auto-enables
+no-auth only
 when nothing is exposed via ingress ("local mode").
 
 If the hub or MCP server crash-loops at startup with `oidc discovery:` in the
@@ -144,7 +145,9 @@ log, the issuer's `/.well-known/openid-configuration` is unreachable or
 malformed. There is no endpoint fallback anymore: fix the issuer URL (or the
 provider) — the service refuses to start with unresolved OIDC endpoints so
 misconfiguration is visible at boot instead of surfacing as 401s on every
-request.
+request. This also blocks startup in `oidc+local` mode: a dead IdP does not
+degrade the install to local-only; operators who need the break-glass path to
+survive a broken issuer run `mode: local` until the IdP is fixed.
 
 If authentication is configured and you are seeing `401 Unauthorized` responses:
 

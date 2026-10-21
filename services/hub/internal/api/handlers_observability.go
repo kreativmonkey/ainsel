@@ -165,6 +165,11 @@ type AgentMetric struct {
 	Invocations      float64 `json:"invocations"`
 	Failures         float64 `json:"failures"`
 	AvgDurationMs    float64 `json:"avgDurationMs"`
+	// CacheReported is the presence flag for the cache components (issue #75):
+	// false means no row/series in the window carried a reported cache figure,
+	// so the cache numerics here are placeholders readers must render as "not
+	// reported", never as a measured 0.
+	CacheReported bool `json:"cacheReported"`
 }
 
 // AgentsMetricsResponse wraps the per-agent metrics.
@@ -849,6 +854,7 @@ func (s *Server) agentsFromRecords(ctx context.Context, rangeKey string) (map[st
 		entry.OutputTokens = float64(row.OutputTokens)
 		entry.CacheReadTokens = float64(row.CacheReadTokens)
 		entry.CacheWriteTokens = float64(row.CacheWriteTokens)
+		entry.CacheReported = row.CacheReported
 	}
 
 	if s.invocations != nil {
@@ -895,8 +901,10 @@ func (s *Server) agentsFromPrometheus(ctx context.Context) (map[string]*AgentMet
 			entry.OutputTokens += m.Value
 		case tokenTypeCacheRead:
 			entry.CacheReadTokens += m.Value
+			entry.CacheReported = true
 		case tokenTypeCacheWrite:
 			entry.CacheWriteTokens += m.Value
+			entry.CacheReported = true
 		}
 	}
 
@@ -963,7 +971,8 @@ func getOrCreateAgent(agents map[string]*AgentMetric, agent string) *AgentMetric
 // singleScalar runs an instant query expected to return a single scalar value
 // and returns 0 (not an error) when the series is empty — this makes "no data
 // yet" indistinguishable from "zero so far," which is the desired UX for a
-// freshly-started hub with no events processed yet.
+// freshly-started hub's event counters. Token/cost panels must not use it:
+// presence is the report there, so they ask singleScalarReported (issue #75).
 func singleScalar(ctx context.Context, p *prometheus.Client, promql string) (float64, error) {
 	result, err := p.Query(ctx, promql)
 	if err != nil {
@@ -973,4 +982,22 @@ func singleScalar(ctx context.Context, p *prometheus.Client, promql string) (flo
 		return 0, nil
 	}
 	return result.Data[0].Value, nil
+}
+
+// singleScalarReported is singleScalar's presence-aware variant (issue #75).
+// It returns (value, reported, error): reported is false exactly when the
+// query's vector is empty — no series exists — which means the runtime never
+// raised the metric (an unpriced model raises no agent_cost_usd_total), as
+// opposed to a series that exists with value 0, which is a measured zero.
+// singleScalar cannot make that distinction because it coerces an empty
+// vector to 0; token and cost panels need it, so they use this instead.
+func singleScalarReported(ctx context.Context, p *prometheus.Client, promql string) (float64, bool, error) {
+	result, err := p.Query(ctx, promql)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(result.Data) == 0 {
+		return 0, false, nil
+	}
+	return result.Data[0].Value, true, nil
 }

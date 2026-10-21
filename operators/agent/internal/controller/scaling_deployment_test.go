@@ -57,7 +57,7 @@ func scalingAgent(scaling *ainselv1alpha1.AgentScaling) *ainselv1alpha1.Agent {
 		DisplayName:  "Worker",
 		ImageRef:     ainselv1alpha1.AgentImageRef{Name: "img"},
 		Runtime:      ainselv1alpha1.AgentRuntime{},
-		LLM:          ainselv1alpha1.AgentLLM{Model: "glm-5.1:cloud"},
+		LLM:          ainselv1alpha1.AgentLLM{Model: "glm-5.1:cloud", Provider: ainselv1alpha1.AgentLLMProviderOllamaCloud},
 		Persona:      ainselv1alpha1.AgentPersona{ID: "01hxtestpersona00000000000"},
 		EnabledTools: []string{"git"},
 		Scaling:      scaling,

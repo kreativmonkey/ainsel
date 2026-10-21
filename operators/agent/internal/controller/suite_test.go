@@ -60,9 +60,6 @@ var _ = BeforeSuite(func() {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
-			// Stub CRDs for resources owned by external operators (e.g. KEDA) so we
-			// can verify the controller reconciles them without vendoring their CRDs.
-			filepath.Join("..", "..", "test", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -215,7 +212,8 @@ func ensureAgentFixtures(ctx context.Context) {
 				},
 				Runtime: ainselv1alpha1.AgentRuntime{},
 				LLM: ainselv1alpha1.AgentLLM{
-					Model: "glm-5.1:cloud",
+					Model:    "glm-5.1:cloud",
+					Provider: ainselv1alpha1.AgentLLMProviderOllamaCloud,
 				},
 				Persona: ainselv1alpha1.AgentPersona{
 					ID: "01hxtestpersona00000000000",

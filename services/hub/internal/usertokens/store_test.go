@@ -154,3 +154,42 @@ func TestValidateUnknown(t *testing.T) {
 		t.Errorf("expected ErrNotFound for unknown token, got %v", err)
 	}
 }
+
+// TestValidateDisabledUser covers issue #117: tokens of a disabled user must
+// be rejected with ErrNotFound — including tokens issued before the flag was
+// flipped — and must start validating again once the user is re-enabled.
+func TestValidateDisabledUser(t *testing.T) {
+	ctx := context.Background()
+	store, pool, cleanup := newTestStoreWithPool(t)
+	defer cleanup()
+
+	_, plaintext, err := store.Create(ctx, "user1", "tok", time.Now().Add(30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Enabled: validates.
+	if _, err := store.Validate(ctx, plaintext); err != nil {
+		t.Fatalf("Validate(enabled): %v", err)
+	}
+
+	// Disable mid-life: existing token is rejected immediately.
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = 'user1'`); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	if _, err := store.Validate(ctx, plaintext); !errors.Is(err, usertokens.ErrNotFound) {
+		t.Errorf("expected ErrNotFound for disabled user, got %v", err)
+	}
+
+	// Re-enable: the same token works again.
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = false WHERE id = 'user1'`); err != nil {
+		t.Fatalf("re-enable user: %v", err)
+	}
+	got, err := store.Validate(ctx, plaintext)
+	if err != nil {
+		t.Fatalf("Validate(re-enabled): %v", err)
+	}
+	if got.UserID != "user1" {
+		t.Errorf("UserID: got %q", got.UserID)
+	}
+}

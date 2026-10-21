@@ -15,32 +15,42 @@ const Issuer = "ainsel-hub"
 
 // TokenTTL is the lifetime of a local session JWT. Stateless by design:
 // there is no server-side session and no refresh flow — users re-login when
-// the token expires. Revocation is deferred (roadmap issue #108, Phase 3).
+// the token expires. Password changes and sign-out-everywhere invalidate
+// issued tokens immediately via the per-user token_version claim (issue #112);
+// other forms of revocation remain deferred (roadmap issue #108, Phase 3).
 const TokenTTL = 12 * time.Hour
 
 // Claims is the validated claim set of a local session token.
 type Claims struct {
-	Sub      string // user ID, always prefixed "local:"
-	Username string // login name without the prefix
-	Admin    bool
+	Sub       string // user ID, always prefixed "local:"
+	Username  string // login name without the prefix
+	Admin     bool
 	ExpiresAt time.Time
+	// TokenVersion must equal the stored users.token_version for the token
+	// to be accepted. Tokens minted before versioning existed carry no
+	// claim and verify as 0 — the same value new rows start at, so
+	// deploying versioning never force-logs-out anyone.
+	TokenVersion int64
 }
 
-// IssueToken signs a local session JWT (HS256) for the given user. It
-// returns the signed token and its expiry time.
-func IssueToken(secret []byte, userID, username string, isAdmin bool) (string, time.Time, error) {
+// IssueToken signs a local session JWT (HS256) for the given user, embedding
+// tokenVersion so the middleware can detect tokens invalidated by a password
+// change/reset or sign-out-everywhere. It returns the signed token and its
+// expiry time.
+func IssueToken(secret []byte, userID, username string, isAdmin bool, tokenVersion int64) (string, time.Time, error) {
 	if len(secret) == 0 {
 		return "", time.Time{}, errors.New("localauth: empty signing secret")
 	}
 	now := time.Now()
 	exp := now.Add(TokenTTL)
 	claims := jwt.MapClaims{
-		"iss":      Issuer,
-		"sub":      userID,
-		"username": username,
-		"admin":    isAdmin,
-		"iat":      now.Unix(),
-		"exp":      exp.Unix(),
+		"iss":           Issuer,
+		"sub":           userID,
+		"username":      username,
+		"admin":         isAdmin,
+		"token_version": tokenVersion,
+		"iat":           now.Unix(),
+		"exp":           exp.Unix(),
 	}
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
 	if err != nil {
@@ -81,6 +91,12 @@ func VerifyToken(secret []byte, raw string) (*Claims, error) {
 	}
 	if v, err := mc.GetExpirationTime(); err == nil && v != nil {
 		c.ExpiresAt = v.Time
+	}
+	// JSON numbers decode as float64. A missing claim means the token was
+	// minted before versioning existed; version 0 is the stored default, so
+	// such tokens keep working until the user's password is changed.
+	if v, ok := mc["token_version"].(float64); ok {
+		c.TokenVersion = int64(v)
 	}
 	if c.Sub == "" {
 		return nil, errors.New("localauth: token missing sub")

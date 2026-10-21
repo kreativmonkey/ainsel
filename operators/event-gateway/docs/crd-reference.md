@@ -63,7 +63,7 @@ spec:
     - push
     - repository
   image:
-    repository: localhost:30500/ainsel/ainsel-event-source-gateway-forgejo
+    repository: registry.example.com/ainsel/ainsel-event-source-gateway-forgejo
     tag: latest
   resources:
     requests:

@@ -38,7 +38,7 @@ for its container image and tool catalog.
 | `runtime.imagePullPolicy` | string | No | Kubernetes image pull policy (`Always`, `Never`, `IfNotPresent`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits for the agent pod |
 | `llm.model` | string | Yes | LLM model identifier (e.g. `unsloth/gpt-oss-120b-GGUF:F16`) |
-| `llm.provider` | string | No | LLM provider backend. One of `ollama-cloud`, `opencode`, `alibaba-cloud`, `custom`, `openai-codex` |
+| `llm.provider` | string | Pi: yes (no schema default) | LLM provider backend. Enum: `ollama-cloud`, `opencode`, `alibaba-cloud`, `custom`, `openai-codex`. `openai-codex` requires a Pi subscription; native Codex/Claude runtimes use their own CLI authentication. Unknown values are rejected by the API server; an unset provider on Pi fails reconciliation with `Ready=False` / reason `InvalidLLMProvider` |
 | `llm.maxTurns` | int | No | Maximum tool-use loop turns |
 | `llm.temperature` | float64 | No | LLM sampling temperature |
 | `llm.vision` | bool | No | Whether pi sends image input. When true the operator advertises `"input": ["text", "image"]` to pi, so screenshots and image attachments are attached; while false pi sends none, even to a model that can see them. The endpoint is never probed: images sent to a model that cannot see them fail the request. Takes effect when the agent's pod next starts (the init container copies `models.json` in at start). Default false |
@@ -54,7 +54,11 @@ for its container image and tool catalog.
 | `memory.enabled` | bool | Yes | Enable shared memory |
 | `memory.provider` | string | No | Memory provider |
 | `ollamaCloud.apiKeySecretRef` | SecretKeySelector | No | Secret containing the Ollama Cloud API key (key: `api-key`). Used when `llm.provider` is `ollama-cloud` |
+| `ollamaCloud.baseUrl` | string | No | Override for the Ollama Cloud API base URL (default `https://ollama.com/v1`). Written to the generated `models.json`; the endpoint is never probed |
 | `openCode.apiKeySecretRef` | SecretKeySelector | No | Secret containing the OpenCode API key (key: `api-key`). Used when `llm.provider` is `opencode` |
+| `openCode.baseUrl` | string | No | Override for the OpenCode API base URL (default `https://opencode.ai/zen/go/v1`) |
+| `alibabaCloud.apiKeySecretRef` | SecretKeySelector | No | Secret containing the Alibaba Token Plan API key (key: `api-key`). Used when `llm.provider` is `alibaba-cloud` |
+| `alibabaCloud.baseUrl` | string | No | Override for the Alibaba base URL — e.g. a different MaaS region than the built-in `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`, or a private compatible-mode endpoint |
 | `customProvider.url` | string | No | Base URL of a custom OpenAI-compatible LLM API (e.g. `https://api.openai.com/v1`). Required when `llm.provider` is `custom` (the `customProvider` block is optional, but `url` is mandatory when `customProvider` is specified) |
 | `customProvider.apiKeySecretRef` | SecretKeySelector | No | Secret containing the custom provider API key (key: `api-key`) |
 
@@ -152,7 +156,7 @@ Referenced by `Agent.spec.imageRef.name`.
 |-------|------|----------|-------------|
 | `displayName` | string | Yes | Human-readable image name |
 | `description` | string | No | Image description |
-| `imageURL` | string | Yes | Container image URL (e.g. `localhost:30500/ainsel/ainsel-ai-agent:latest`) |
+| `imageURL` | string | Yes | Container image URL (e.g. `registry.example.com/ainsel/ainsel-ai-agent:latest`) |
 | `tools[]` | []AgentImageTool | No | Tools exposed by this image |
 | `tools[].name` | string | Yes | Tool name |
 | `tools[].kind` | string | Yes | Tool kind: `container`, `shell`, or `mcp` |
@@ -196,7 +200,7 @@ metadata:
 spec:
   displayName: "AInsel AI Agent (latest)"
   description: "Default agent image with forgejo, git, and shell tools"
-  imageURL: localhost:30500/ainsel/ainsel-ai-agent:latest
+  imageURL: registry.example.com/ainsel/ainsel-ai-agent:latest
   tools:
     - name: forgejo
       kind: container
@@ -223,7 +227,7 @@ spec:
       tokenFromEnv: MEMORY_MCP_TOKEN
   sidecars:
     - name: sqlite-mcp
-      image: localhost:30500/ainsel/sqlite-mcp:latest
+      image: registry.example.com/ainsel/sqlite-mcp:latest
       port: 9090
       mcpPath: /mcp
   enabledSkills:
@@ -309,7 +313,7 @@ Each filter has three fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `field` | string | Dot-separated path into the event payload (e.g. `repo`, `action`, `issue.labels`) |
+| `field` | string | Dot-separated path into the event payload (e.g. `repo`, `action`, `issue.labels.name`). A path that crosses an array collects the value from every element, so `issue.labels.name` is the list of label names |
 | `op` | string | Comparison operator (see table below) |
 | `value` | string | Comparison value (used by all operators except `in`/`not-in`) |
 | `values` | []string | Comparison values for `in` and `not-in` operators |

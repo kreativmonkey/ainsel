@@ -101,7 +101,10 @@ func (s *Store) Revoke(ctx context.Context, id, userID string) error {
 }
 
 // Validate looks up the token by hash, marks last_used_at, and returns the
-// Token row. Returns ErrNotFound if the token is unknown, expired, or revoked.
+// Token row. Returns ErrNotFound if the token is unknown, expired, revoked,
+// or belongs to a disabled user. The disabled check lives here, in SQL, so
+// every caller (hub middleware and the internal MCP validate endpoint)
+// enforces it atomically with the token lookup.
 func (s *Store) Validate(ctx context.Context, plaintext string) (*Token, error) {
 	sum := sha256.Sum256([]byte(plaintext))
 	hash := hex.EncodeToString(sum[:])
@@ -110,6 +113,7 @@ func (s *Store) Validate(ctx context.Context, plaintext string) (*Token, error) 
 		UPDATE user_tokens
 		SET last_used_at = now()
 		WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+		  AND EXISTS (SELECT 1 FROM users u WHERE u.id = user_tokens.user_id AND NOT u.disabled)
 		RETURNING id, user_id, name, expires_at, last_used_at, created_at, revoked_at
 	`, hash).Scan(&t.ID, &t.UserID, &t.Name, &t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt, &t.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {

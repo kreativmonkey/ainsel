@@ -87,7 +87,7 @@ tool with `curl` to store and retrieve memories.
 ## Environment
 
 - `$MEM0_API_URL` — base URL of the mem0 API
-  (e.g. `http://mem0.ainsel-dev.svc.cluster.local:8080`). No trailing
+  (e.g. `http://mem0.ainsel.svc.cluster.local:8080`). No trailing
   slash.
 - `$MEM0_API_KEY` — (optional) bearer token, if the API requires authentication.
   May be empty.
@@ -202,7 +202,7 @@ CRD — see the [Administrator Guide](administrator-guide.md) and the
 2. Under **Tools**, enable the **bash** (shell) tool.
 3. Under **Environment**, add:
    - `MEM0_API_URL` — the URL of your mem0 instance, e.g.
-     `http://mem0.ainsel-dev.svc.cluster.local:8080`.
+     `http://mem0.ainsel.svc.cluster.local:8080`.
    - `MEM0_API_KEY` *(optional)* — only if your mem0 instance requires
      authentication. Mark it as a secret.
 4. Under **Skills**, enable **memory-management**.

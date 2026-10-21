@@ -6,11 +6,11 @@ determined by their role in that group.
 
 ## Authentication
 
-Interactive users authenticate either through an external OIDC provider or
-with hub-managed local accounts (`auth.mode: local`), depending on the
-deployment. In addition, every user can create personal access tokens for
-programmatic use. All methods resolve to the same user identity and grant
-the same permissions.
+Interactive users authenticate through an external OIDC provider, with
+hub-managed local accounts (`auth.mode: local`), or both at once
+(`auth.mode: oidc+local`), depending on the deployment. In addition, every
+user can create personal access tokens for programmatic use. All methods
+resolve to the same user identity and grant the same permissions.
 
 ### OIDC (interactive)
 
@@ -20,7 +20,8 @@ frontend handles the OAuth flow automatically. API requests carry a standard
 
 ### Local users (interactive)
 
-When the platform runs with `auth.mode: local`, users sign in with
+When the platform runs with `auth.mode: local` (or `oidc+local`, where the
+login page offers both paths), users sign in with
 username/password against the hub itself. An `admin` account is bootstrapped
 on first start; further users are managed by admins via the UI (**Admin →
 Users**) or the `/api/v1/users` API. Successful logins receive a session
@@ -172,6 +173,7 @@ Users with the admin flag bypass all authorization checks. Admins can:
 - Access any resource in any group
 - Manage any group's membership
 - Promote/demote other admins
+- Disable/enable user accounts
 - See all observability data
 
 Admin status is managed via the users API:
@@ -181,6 +183,25 @@ curl -X PATCH https://ainsel.example.com/api/v1/users/<user-id> \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
   -d '{"isAdmin": true}'
+```
+
+Admins can also **disable** an account without deleting it — group
+memberships and user tokens are kept, but the user fails all authentication:
+login is rejected and existing session JWTs and user tokens return 401 while
+disabled. Re-enabling restores access immediately.
+
+One accepted boundary: an already-established WebSocket connection
+(`/api/v1/ws`) is not torn out when the user is disabled — it stays open
+until the client reconnects, at which point the upgrade itself fails
+authentication. Until then the connection only keeps receiving the read-only
+stats/event stream; the hub does not interpret client messages on it, so no
+new authorization decisions are granted to a disabled user.
+
+```bash
+curl -X PATCH https://ainsel.example.com/api/v1/users/<user-id> \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"disabled": true}'
 ```
 
 ## Internal Service Authentication

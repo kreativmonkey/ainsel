@@ -13,6 +13,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("OIDC_PROJECT_ID", "proj-123")
 	t.Setenv("OIDC_AUDIENCE", "")
 	t.Setenv("OIDC_SIGNING_ALGS", " ES256, EdDSA ")
+	t.Setenv("OIDC_SCOPES", "openid profile groups")
 	t.Setenv("HUB_URL", "http://hub-backend.test:8080")
 
 	cfg := config.Load()
@@ -24,6 +25,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if !slices.Equal(cfg.OIDCSigningAlgs, []string{"ES256", "EdDSA"}) {
 		t.Errorf("OIDCSigningAlgs = %v; want [ES256 EdDSA]", cfg.OIDCSigningAlgs)
+	}
+	if cfg.OIDCScopes != "openid profile groups" {
+		t.Errorf("OIDCScopes = %q; want %q", cfg.OIDCScopes, "openid profile groups")
 	}
 	if cfg.HubURL != "http://hub-backend.test:8080" {
 		t.Errorf("HubURL = %q; want http://hub-backend.test:8080", cfg.HubURL)

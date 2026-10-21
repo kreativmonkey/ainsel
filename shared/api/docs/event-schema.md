@@ -39,36 +39,39 @@ Every event in the Ainsel platform uses this canonical format, regardless of the
 
 ## Event Types
 
-### Issue Events
+Event `data` is carried as raw JSON — there are no Go payload types. The
+fields below are what connectors emit and what filters match against.
 
-| Type | Data Payload | Description |
+### Issue events
+
+| Type | Data fields | Description |
 |------|-------------|-------------|
-| `issue.opened` | `IssueData` | New issue created |
-| `issue.assigned` | `IssueData` | Issue assigned to someone |
-| `issue.closed` | `IssueData` | Issue closed |
-| `issue.reopened` | `IssueData` | Issue reopened |
-| `issue.label.added` | `IssueData` | Label added to issue |
-| `issue.comment.created` | `IssueCommentData` | Comment added to issue |
+| `issue.opened` | `issue` | New issue created |
+| `issue.assigned` | `issue` | Issue assigned to someone |
+| `issue.closed` | `issue` | Issue closed |
+| `issue.reopened` | `issue` | Issue reopened |
+| `issue.label.added` | `issue`, `label` | Label added to issue |
+| `issue.comment.created` | `issue`, `comment` | Comment added to issue |
 
-### Pull Request Events
+### Pull request events
 
-| Type | Data Payload | Description |
+| Type | Data fields | Description |
 |------|-------------|-------------|
-| `pull_request.opened` | `PullRequestData` | New PR created |
-| `pull_request.closed` | `PullRequestData` | PR closed or merged |
-| `pull_request.comment.created` | `PullRequestCommentData` | Comment on PR |
-| `pull_request.review.submitted` | `PullRequestReviewData` | Review submitted |
+| `pull_request.opened` | `pull_request` | New PR created |
+| `pull_request.closed` | `pull_request` | PR closed or merged |
+| `pull_request.comment.created` | `pull_request`, `comment` | Comment on PR |
+| `pull_request.review.submitted` | `pull_request`, `review` | Review submitted |
 
-### Other Events
+### Other events
 
-| Type | Data Payload | Description |
+| Type | Data fields | Description |
 |------|-------------|-------------|
-| `push` | `PushData` | Push to repository |
+| `push` | `ref`, `before`, `after`, `commits` | Push to repository |
 | `repository.created` | - | New repository created |
 
 ## Data Payloads
 
-### IssuePayload
+### Issue object
 
 ```json
 {
@@ -83,7 +86,7 @@ Every event in the Ainsel platform uses this canonical format, regardless of the
 }
 ```
 
-### PullRequestPayload
+### Pull request object
 
 ```json
 {
@@ -99,7 +102,7 @@ Every event in the Ainsel platform uses this canonical format, regardless of the
 }
 ```
 
-### CommentPayload
+### Comment object
 
 ```json
 {
@@ -111,7 +114,7 @@ Every event in the Ainsel platform uses this canonical format, regardless of the
 }
 ```
 
-### PushData
+### Push payload
 
 ```json
 {

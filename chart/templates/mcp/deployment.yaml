@@ -1,4 +1,7 @@
 {{- if .Values.mcp.enabled }}
+{{- if or (not .Values.auth.oidcIssuer) (not (.Values.auth.oidcAudience | default .Values.auth.oidcProjectId | default .Values.auth.oidcClientId)) }}
+{{- fail "mcp.enabled requires auth.oidcIssuer and auth.oidcAudience or auth.oidcClientId" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,13 +66,8 @@ spec:
           env:
             - name: PORT
               value: "{{ .Values.mcp.port }}"
-            - name: NAMESPACE
-              value: {{ .Values.namespace }}
             - name: HUB_URL
-              value: http://hub-backend.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.hub.port }}            {{- if .Values.observability.prometheus.url }}
-            - name: PROMETHEUS_URL
-              value: {{ .Values.observability.prometheus.url | quote }}
-            {{- end }}
+              value: http://hub-backend.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.hub.port }}
             - name: OIDC_ISSUER
               value: {{ .Values.auth.oidcIssuer | quote }}
             - name: OIDC_AUDIENCE
@@ -78,8 +76,10 @@ spec:
               value: {{ .Values.auth.oidcSigningAlgs | quote }}
             - name: OIDC_CLIENT_ID
               value: {{ .Values.auth.oidcClientId | quote }}
+            {{- with include "ainsel.oidcRolesClaim" . }}
             - name: OIDC_ROLES_CLAIM
-              value: {{ .Values.auth.oidcRolesClaim | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             - name: OIDC_SCOPES
               value: {{ include "ainsel.oidcScopes" . | quote }}
             {{- if .Values.mcp.externalUrl }}

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { TokensSubjectRow } from '../../api/observability'
 import { RegisterTable, type Column } from '../../primitives/RegisterTable'
+import { NotReported } from '../../primitives/NotReported'
 import { Tag } from '../../primitives/Tag'
 import { abbreviateNumber, formatUSD } from '../../utils/format'
 
@@ -48,20 +49,33 @@ const columns: readonly Column<TokensSubjectRow>[] = [
   // Cache traffic is the bulk of an agent loop's prompt (pi's usage.input
   // excludes it) and is priced differently from input, so it gets its own
   // columns — without them the visible columns do not sum to the total
-  // (issue #281).
+  // (issue #281). A row whose cache was never reported renders "not
+  // reported", not 0: the summed zero there is a placeholder, not a
+  // measurement (issue #75). A missing flag is a hub older than the flags —
+  // unknown, so the legacy rendering stays.
   {
     key: 'cacheRead',
     header: 'Cache R',
     width: 90,
     align: 'right',
-    cell: (r) => <span className="num">{abbreviateNumber(r.cacheReadTokens ?? 0)}</span>,
+    cell: (r) =>
+      r.cacheReported === false ? (
+        <NotReported />
+      ) : (
+        <span className="num">{abbreviateNumber(r.cacheReadTokens ?? 0)}</span>
+      ),
   },
   {
     key: 'cacheWrite',
     header: 'Cache W',
     width: 90,
     align: 'right',
-    cell: (r) => <span className="num">{abbreviateNumber(r.cacheWriteTokens ?? 0)}</span>,
+    cell: (r) =>
+      r.cacheReported === false ? (
+        <NotReported />
+      ) : (
+        <span className="num">{abbreviateNumber(r.cacheWriteTokens ?? 0)}</span>
+      ),
   },
   {
     key: 'total',
@@ -75,7 +89,13 @@ const columns: readonly Column<TokensSubjectRow>[] = [
     header: 'Cost',
     width: 90,
     align: 'right',
-    cell: (r) => <span className="num">{formatUSD(r.costUsd ?? 0)}</span>,
+    // An unpriced model reports nothing — "not reported", not $0.00 (issue #75).
+    cell: (r) =>
+      r.costReported === false ? (
+        <NotReported />
+      ) : (
+        <span className="num">{formatUSD(r.costUsd ?? 0)}</span>
+      ),
   },
 ]
 

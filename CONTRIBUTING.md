@@ -21,7 +21,7 @@ on code and design rather than people.
 
 ## Reporting issues
 
-Open an issue in the Forgejo issue tracker for the
+Open a GitHub issue in the
 [ainsel-project/ainsel](https://github.com/ainsel-project/ainsel/issues)
 repo. Useful issues include:
 
@@ -122,12 +122,42 @@ updates are managed by CI.
 Avoid editing the workflows or Dockerfiles without coordinating — see
 [Releases](#releases) for how versions and tags are produced.
 
+## Working with hub database migrations
+
+Migrations live in `services/hub/internal/db/migrations/` and are applied by the
+hub at startup. They are **append-only**: once a migration has been published,
+never renumber, edit or delete it. Give the next file the next number.
+
+This is not a style preference. `schema_migrations` records only the *highest*
+applied version, so a database that has already been taken to version N silently
+accepts a renumbered history: `Up()` finds nothing above N and applies nothing,
+and the migration that should have run never does. Ship the code and every query
+touching the missing column returns a 500 — with a pod that started clean.
+
+To make that class of mistake fatal instead of silent, `Migrate` also keeps a
+per-version checksum history in `schema_history`: an applied version whose
+recorded checksum differs from the file shipping now stops the hub from starting
+(`migration history drift`). See
+[docs/upgrade-guide.md](docs/upgrade-guide.md#migration-history-integrity) for
+how to recover a database that is already in that state.
+
+Adding a migration is therefore the only permitted change to that directory:
+
+```bash
+# next number, never a reused one
+cp services/hub/internal/db/migrations/0027_example.up.sql \
+   services/hub/internal/db/migrations/0028_add_my_column.up.sql
+```
+
+A new migration must be safe to run on a database that already holds data — the
+dev cluster is upgraded in place, not recreated.
+
 ## CI runners
 
 Everything in `.github/workflows/` runs on **GitHub Actions** with the standard
-`ubuntu-latest` label, so any runner can pick the jobs up. The dev-cluster
-deployment is the one exception: it lives in the `AInsel/ainsel-deployment`
-repository on Forgejo, not here.
+`ubuntu-latest` label, so any runner can pick the jobs up. Deploying to a
+cluster is out of scope here: this repo builds and publishes images, and
+rolling them out is left to whatever pipeline owns the environment.
 
 | workflow | trigger | does |
 | --- | --- | --- |
@@ -323,8 +353,8 @@ published.
 
 ### Releasing is not deploying
 
-The dev cluster keeps running mutable `:dev` images built from `main`; the
-`AInsel/ainsel-deployment` workflow on Forgejo rolls them out on a schedule. A
+A dev install keeps running mutable `:dev` images built from `main`, and
+rolling those out is whatever deploy pipeline runs in that environment. A
 release does not touch it. Pointing an environment at a release means setting
 the chart version (or the component `image.tag` values) explicitly.
 
@@ -409,5 +439,5 @@ full tutorial covering the CRD, service, operator, and chart integration.
 - For architectural questions, start by skimming
   [`docs/architecture.md`](docs/architecture.md).
 
-There is no chat, Discord, Matrix, or discussion forum — Forgejo issues
+There is no chat, Discord, Matrix, or discussion forum — GitHub issues
 are the only support surface. Open an issue for anything not covered above.

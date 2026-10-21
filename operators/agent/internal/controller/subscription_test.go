@@ -54,7 +54,10 @@ func TestSubscriptionTemplateIsolation(t *testing.T) {
 	}}}
 	plan := newPodPlan(a, "agent-worker", img)
 	configureSubscriptionPlan(a, plan)
-	env := buildAgentEnv(context.Background(), a, "agent-worker", img, plan)
+	env, err := buildAgentEnv(context.Background(), a, "agent-worker", img, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tpl := (&AgentReconciler{}).renderPodTemplate(a, img, "native:1", plan, env)
 	if len(tpl.Spec.InitContainers) != 0 {
 		t.Fatal("native runtime initialized Pi")
@@ -190,7 +193,10 @@ func TestPiSubscriptionPreservesRuntimeAndPersistsAuth(t *testing.T) {
 	if !found {
 		t.Fatal("Pi authentication directory is not persistent")
 	}
-	env := buildAgentEnv(context.Background(), a, "agent-worker", img, plan)
+	env, err := buildAgentEnv(context.Background(), a, "agent-worker", img, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tpl := (&AgentReconciler{}).renderPodTemplate(a, img, "pi:1", plan, env)
 	if len(tpl.Spec.Containers[0].Command) != 0 {
 		t.Fatal("Pi entrypoint replaced by native runner")

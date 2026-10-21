@@ -168,10 +168,20 @@ const (
 	AgentLLMProviderOpenCode     = "opencode"
 	AgentLLMProviderAlibabaCloud = "alibaba-cloud"
 	AgentLLMProviderCustom       = "custom"
+	AgentLLMProviderOpenAICodex  = "openai-codex"
 )
 
 type AgentLLM struct {
-	Model       string   `json:"model"`
+	Model string `json:"model"`
+	// Provider selects the LLM backend. It has no default on purpose: an
+	// unset or unknown provider fails the reconcile with a Ready=False
+	// condition (reason InvalidLLMProvider) instead of silently sending
+	// traffic and the API key to a third-party SaaS. The enum rejects any
+	// non-empty value outside the list at the API server; the empty value
+	// stays schema-valid for one release so stored Agents are not broken
+	// by a CRD upgrade, and is rejected by the operator.
+	// +optional
+	// +kubebuilder:validation:Enum=ollama-cloud;opencode;alibaba-cloud;custom;openai-codex
 	Provider    string   `json:"provider,omitempty"`
 	MaxTurns    int      `json:"maxTurns,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
@@ -286,6 +296,11 @@ type AgentOllamaCloud struct {
 	// APIKeySecretRef references the secret containing the Ollama Cloud API key.
 	// The secret must have a key named "api-key".
 	APIKeySecretRef *corev1.SecretKeySelector `json:"apiKeySecretRef,omitempty"`
+	// BaseURL overrides the provider's API base URL written to the agent's
+	// generated models.json. Unset means the built-in URL
+	// (https://ollama.com/v1). The endpoint is never probed.
+	// +optional
+	BaseURL string `json:"baseUrl,omitempty"`
 }
 
 // AgentOpenCode configures the OpenCode provider.
@@ -294,6 +309,11 @@ type AgentOpenCode struct {
 	// APIKeySecretRef references the secret containing the OpenCode API key.
 	// The secret must have a key named "api-key".
 	APIKeySecretRef *corev1.SecretKeySelector `json:"apiKeySecretRef,omitempty"`
+	// BaseURL overrides the provider's API base URL written to the agent's
+	// generated models.json. Unset means the built-in URL
+	// (https://opencode.ai/zen/go/v1). The endpoint is never probed.
+	// +optional
+	BaseURL string `json:"baseUrl,omitempty"`
 }
 
 // AgentAlibabaCloud configures the Alibaba Token Plan provider.
@@ -302,6 +322,14 @@ type AgentAlibabaCloud struct {
 	// APIKeySecretRef references the secret containing the Alibaba Token Plan API key.
 	// The secret must have a key named "api-key".
 	APIKeySecretRef *corev1.SecretKeySelector `json:"apiKeySecretRef,omitempty"`
+	// BaseURL overrides the provider's API base URL written to the agent's
+	// generated models.json — e.g. a different Alibaba MaaS region than the
+	// built-in ap-southeast-1 endpoint, or a private compatible-mode
+	// endpoint. Unset means the built-in URL
+	// (https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1).
+	// The endpoint is never probed.
+	// +optional
+	BaseURL string `json:"baseUrl,omitempty"`
 }
 
 // AgentCustomProvider configures a custom LLM provider.

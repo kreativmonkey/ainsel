@@ -75,8 +75,6 @@ agentOperator:
     repository: dpinsel/ainsel-k8s-ai-agent-operator
     tag: "0.1.0"
     pullPolicy: IfNotPresent
-  forgejoUrl: ""
-  forgejoTokenSecret: {}
   # Terminating signal sent to agent pods. pflag parses this as a Go duration,
   # so it needs a unit: "30m", not "1800".
   agentGracePeriod: 0 # e.g. 30m
@@ -177,10 +175,17 @@ hub:
   # must operate on a different namespace than it is deployed to.
   namespace: ""
   ingress:
+    # With className: nginx the path below is rendered as an nginx regex
+    # together with use-regex/rewrite-target annotations. Any other class
+    # renders a literal Prefix path and drops every nginx.ingress.kubernetes.io/*
+    # annotation (including the ones here) — see "Ingress controllers" in
+    # docs/deployment.md.
     enabled: true
     host: ainsel.example.com
     path: /ainsel/api
     className: nginx
+    # Secret holding the TLS certificate for this host
+    tlsSecretName: hub-tls
     annotations:
       nginx.ingress.kubernetes.io/rewrite-target: /api/$2
   # Externally-reachable platform URL. When empty it is derived from the
@@ -235,10 +240,15 @@ ui:
     tag: "0.2.1"
     pullPolicy: IfNotPresent
   ingress:
+    # See the note on hub.ingress: non-nginx classes get a literal Prefix path
+    # (trailing capture groups such as (/|$)(.*) are stripped) and no nginx
+    # annotations.
     enabled: true
     host: ainsel.example.com
     path: /ainsel(/|$)(.*)
     className: nginx
+    # Secret holding the TLS certificate for this host
+    tlsSecretName: ui-tls
     annotations:
       nginx.ingress.kubernetes.io/rewrite-target: /$2
   resources:
@@ -273,6 +283,12 @@ postgres:
     tag: "17-alpine"
     pullPolicy: IfNotPresent
   storage: 5Gi
+  # StorageClass for the data volume. Empty uses the cluster default; an
+  # existing install keeps the class its StatefulSet was created with.
+  # Renderers without cluster access (Argo CD, `helm template`) cannot see the
+  # existing class: installs created before this value existed must set
+  # "local-path" explicitly there.
+  storageClassName: ""
   database: ainselhub
   username: ainselhub
   # When existingSecret is empty, the chart generates a random password and
@@ -320,6 +336,9 @@ mcp:
   # metadata and the WWW-Authenticate header. Required when mcp.enabled is true.
   resourceUrl: ""
   ingress:
+    # See the note on hub.ingress: non-nginx classes get literal Prefix/Exact
+    # paths and no nginx rewrite annotations, so the rewrite onto /mcp has to
+    # be done by controller-side middleware.
     enabled: true
     host: ainsel.example.com
     path: /ainsel/mcp
@@ -360,13 +379,17 @@ chatMCP:
     repository: "dpinsel/ainsel-chat-mcp"
     tag: "0.1.0"
 # OIDC configuration. When unset, the hub backend refuses to start unless
-# auth.allowInsecureNoAuth is true (see below); the frontend image always
-# requires a complete OIDC config, so the UI is only usable with OIDC set.
+# auth.allowInsecureNoAuth is true (see below). OIDC modes require a complete
+# frontend OIDC config when the UI is enabled.
 auth:
-  # Authentication mode: oidc | local | none.
+  # Authentication mode: oidc | local | oidc+local | none.
   #   oidc  - external OIDC provider (requires oidcIssuer/oidcClientId)
   #   local - hub-managed username/password accounts (see auth.local);
   #           an admin account is bootstrapped from a chart Secret
+  #   oidc+local - both at once: login page offers SSO and a local
+  #           username/password form (gradual SSO migration or a break-glass
+  #           local admin next to SSO). Requires the full OIDC config and
+  #           the auth.local secrets; the local admin is bootstrapped too
   #   none  - no authentication; only safe port-forwarded or behind an edge
   #           auth proxy (Authelia/Authentik/oauth2-proxy)
   # Empty (default) keeps the legacy behavior: OIDC when oidcIssuer is
@@ -383,10 +406,11 @@ auth:
   # Space-separated scopes; empty uses standard scopes, or legacy project scope
   # when oidcProjectId is supplied. Set explicitly for provider-specific scopes.
   oidcScopes: ""
-  # JWT claim containing role strings or object keys (e.g. groups).
+  # JWT claim containing role strings or object keys. Empty reads `groups`, or
+  # the legacy Zitadel project-roles claim when oidcProjectId is set.
   # Exact claim keys take precedence over dotted nested paths.
   # Roles are informational; application permissions are managed in the hub DB.
-  oidcRolesClaim: "urn:zitadel:iam:org:project:roles"
+  oidcRolesClaim: ""
   # Deprecated Zitadel compatibility alias; not required for other providers.
   oidcProjectId: ""
   # Allow the hub backend to run WITHOUT auth middleware (sets
@@ -411,9 +435,12 @@ auth:
   # and must not become a bearer token for a second endpoint. Unset leaves
   # the catalogue endpoint answering 503, so it is opt-in per instance.
   skillsMcpToken: ""
-  # Settings for mode "local" (hub-managed username/password accounts).
+  # Settings for modes "local" and "oidc+local" (hub-managed
+  # username/password accounts).
   local:
-    # Username of the bootstrapped admin account (created on first start).
+    # Username of the bootstrapped admin account (created on first start;
+    # also created in mode oidc+local — delete it via the admin users API
+    # if you want SSO-only users despite the coexistence mode).
     adminUser: admin
     # Existing Secret holding the admin password under key "password".
     # When empty, the chart generates one into Secret "ainsel-local-admin":
@@ -423,12 +450,6 @@ auth:
     # Existing Secret holding the JWT signing key under key "secret".
     # When empty, the chart generates one into Secret "ainsel-local-jwt".
     jwtSecretSecret: ""
-# Forgejo integration — enables the bug-report button in the frontend.
-# When unset, the report button's issue-creation call will fail with
-# "Forgejo is not configured". Leave empty to disable issue creation.
-forgejo:
-  apiBase: ""
-  repo: ""
 # Observability — external Prometheus endpoint and metric source
 #
 # metricsSource picks which backend answers the console's event KPIs and

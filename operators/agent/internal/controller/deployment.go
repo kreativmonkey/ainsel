@@ -263,7 +263,10 @@ func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *ainsel
 
 		deploy.Labels = plan.labels
 
-		agentEnv := buildAgentEnv(ctx, agent, agentName, img, plan)
+		agentEnv, err := buildAgentEnv(ctx, agent, agentName, img, plan)
+		if err != nil {
+			return err
+		}
 
 		deploy.Spec = appsv1.DeploymentSpec{
 			// Zero forever: work runs as per-task Jobs, never as Deployment
@@ -294,10 +297,26 @@ func (r *AgentReconciler) reconcileDeployment(ctx context.Context, agent *ainsel
 // plan.mcpEntries (the MCP_SERVERS value) and plan.missingEnv (token
 // references to env vars the AgentImage does not define), both consumed by
 // later render stages and the Reconcile loop.
-func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alpha1.AgentImage, plan *podPlan) []corev1.EnvVar {
+func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName string, img *ainselv1alpha1.AgentImage, plan *podPlan) ([]corev1.EnvVar, error) {
+	var pp piProviderConfig
+	if !nativeRuntime(agent) {
+		var err error
+		pp, err = resolvePiProvider(agent)
+		if err != nil {
+			// Reconcile validates the provider up front; keep direct callers safe.
+			return nil, err
+		}
+	}
 	envs := []corev1.EnvVar{
 		{Name: "AGENT_NAME", Value: agent.Name},
-		{Name: "PI_PROVIDER", Value: resolvePiProvider(agent).Name},
+		{Name: "PI_PROVIDER", Value: pp.Name},
+		// AINSEL_LLM_MODEL is the provider-neutral runtime model contract
+		// (issue #96). OLLAMA_CLOUD_MODEL is written as a transitional alias
+		// with the same value for one release, so old runtime images keep
+		// working against a new operator and new runtime images work against
+		// old operators (the operator and the AgentImage version
+		// independently). Remove the alias one release after this lands.
+		{Name: "AINSEL_LLM_MODEL", Value: agent.Spec.LLM.Model},
 		{Name: "OLLAMA_CLOUD_MODEL", Value: agent.Spec.LLM.Model},
 		{Name: "AGENT_PERSONA_PATH", Value: "/etc/agent/persona.md"},
 		{Name: "HUB_URL", Value: resolveHubURL()},
@@ -307,7 +326,6 @@ func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName s
 		// below so image config can never override it (see
 		// platformManagedAgentEnv).
 		{Name: "HUB_INTERNAL_VALIDATE_SECRET", Value: resolveHubInternalToken()},
-		{Name: "HUB_ENABLED", Value: "true"},
 	}
 	// OLLAMA_API_KEY is required by the pi/Ollama-Cloud runtime.
 	// The secret is created by the hub backend when the agent is
@@ -499,7 +517,7 @@ func buildAgentEnv(ctx context.Context, agent *ainselv1alpha1.Agent, agentName s
 	if piSubscription(agent) {
 		envs = append(envs, subscriptionEnv(agent)...)
 	}
-	return envs
+	return envs, nil
 }
 
 // renderPodTemplate assembles the pod template from the plan and the rendered
@@ -686,8 +704,16 @@ func (r *AgentReconciler) stampPodTemplateAnnotations(ctx context.Context, agent
 	// digest changes, which causes Kubernetes to perform a rolling
 	// restart so agents pick up the new image automatically.
 	if digest, err := resolveImageDigest(ctx, podImage); err != nil {
-		logf.FromContext(ctx).Info("could not resolve image digest; skipping restart annotation",
-			"image", podImage, "error", err)
+		// Non-blocking by design: a registry outage or an unsupported registry
+		// must never stop the Deployment from reconciling. But the lost restart
+		// trigger is invisible from the outside — the agent just keeps running
+		// the old image — so surface it as a Warning event on the Agent.
+		logf.FromContext(ctx).Error(err, "could not resolve image digest; skipping restart annotation",
+			"image", podImage)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(agent, corev1.EventTypeWarning, "ImageDigestResolutionFailed",
+				"Could not resolve image digest for %s; restart-on-rebuild annotation skipped: %v", podImage, err)
+		}
 	} else {
 		deploy.Spec.Template.Annotations[imageDigestAnnotation] = digest
 	}

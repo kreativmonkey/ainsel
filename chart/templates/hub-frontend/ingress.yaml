@@ -1,4 +1,11 @@
 {{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+{{- $isNginx := eq (include "ainsel.isNginx" .Values.ui.ingress.className) "true" -}}
+{{- $annotations := fromYaml (include "ainsel.ingressAnnotations" (dict "isNginx" $isNginx "nginxOnly" (dict "nginx.ingress.kubernetes.io/use-regex" "true") "extra" .Values.ui.ingress.annotations)) -}}
+{{- $path := .Values.ui.ingress.path -}}
+{{/* On non-nginx renders use a literal path: strip trailing nginx capture groups such as (/|$)(.*). */}}
+{{- if not $isNginx -}}
+{{- $path = regexReplaceAll "\\([^()]*\\)\\([^()]*\\)$" .Values.ui.ingress.path "" -}}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,23 +14,29 @@ metadata:
   labels:
     {{- include "ainsel.labels" . | nindent 4 }}
     app.kubernetes.io/component: hub-frontend
+  {{- with $annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    {{- with .Values.ui.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ui.ingress.className }}
   tls:
     - hosts:
         - {{ .Values.ui.ingress.host }}
-      secretName: ui-tls
+      secretName: {{ .Values.ui.ingress.tlsSecretName | default "ui-tls" }}
   rules:
     - host: {{ .Values.ui.ingress.host }}
       http:
         paths:
-          - path: {{ .Values.ui.ingress.path }}
-            pathType: ImplementationSpecific
+          # nginx renders the configured path as a regex (see the
+          # use-regex annotation) with pathType ImplementationSpecific;
+          # other controllers get the literal path with pathType Prefix.
+          # The frontend serves under ui.basePath — on a non-nginx
+          # controller, configure rewrite/strip-prefix middleware so the
+          # request path still matches it (see "Ingress controllers" in
+          # docs/deployment.md).
+          - path: {{ $path }}
+            pathType: {{ if $isNginx }}ImplementationSpecific{{ else }}Prefix{{ end }}
             backend:
               service:
                 name: hub-frontend

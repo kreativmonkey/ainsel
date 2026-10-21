@@ -3,16 +3,25 @@
 The hub service (see [`services/hub/`](../services/hub/)) exposes a REST API for managing Ainsel resources. Most endpoints operate on CRDs in the configured Kubernetes namespace; others surface observability data, invocation history, and operator state.
 
 **Base URL:** `/api/v1`
-**Ingress:** `https://ainsel.example.com/ainsel/api/v1`
+**Ingress:** `https://ainsel.example.com/ainsel/api/v1` — when deployed via the
+ainsel-chart, the nginx ingress rewrites `/ainsel/api` to `/api`.
 
 All list endpoints accept the standard pagination query parameters:
 
 | Query | Default | Max | Notes |
 |-------|---------|-----|-------|
-| `page` | `1` | — | 1-indexed page number; non-numeric values return `400`. |
-| `pageSize` | `50` | `200` | Values above the max are clamped down. |
+| `page` | `1` | — | 1-indexed page number; non-numeric values return `400`, values `< 1` are coerced to `1`. |
+| `pageSize` | `50` | `200` | Values above the max are clamped down; values `< 1` are coerced to `1`. |
 
-List responses include `total`, `page`, `pageSize`, and `totalPages` alongside the per-collection `items`.
+List responses include `total`, `page`, `pageSize`, and `totalPages` alongside the per-collection `items`. The
+`/invocations` endpoint keeps its legacy `invocations` key (instead of `items`) for backward
+compatibility but otherwise carries the same pagination fields. Pages are ordered deterministically —
+by resource name for Kubernetes-backed endpoints, by start time for invocations — so a given `page`
+returns the same slice across calls.
+
+Successful mutations return `200 OK` (update) or `201 Created` (create) with a JSON body; a successful
+`DELETE` returns `204 No Content` with an empty body. Asynchronous trigger endpoints
+(e.g. `POST /api/v1/agent-images/{name}/sync`) return `202 Accepted` with no body.
 
 ## Health Check
 
@@ -1125,13 +1134,17 @@ Aggregate dashboard tile. Returns resource counts (total + healthy) for agents, 
   "connectors": {"total": 2, "healthy": 2},
   "triggers":   {"total": 12, "healthy": 11},
   "errors":     {"lastHour": 3},
-  "tokens":     {"inputTokens": 120000, "outputTokens": 45000, "cacheReadTokens": 1800000, "cacheWriteTokens": 60000, "totalTokens": 2025000, "costUsd": 1.87}
+  "tokens":     {"inputTokens": 120000, "outputTokens": 45000, "cacheReadTokens": 1800000, "cacheWriteTokens": 60000, "totalTokens": 2025000, "costUsd": 1.87, "cacheReported": true, "costReported": true}
 }
 ```
 
 `costUsd` is priced consumption — pi's `usage.cost`, priced from each model's
-`spec.llm.cost` block (see the administrator guide). Agents running unpriced
-models report zero cost. See [token components](#token-components).
+`spec.llm.cost` block (see the administrator guide). `cacheReported` and
+`costReported` are presence flags: `false` means no data in scope ever
+reported that figure — for example every agent runs an unpriced model — so
+the corresponding numeric is a placeholder and readers must render it as
+"not reported", never as a measured `0` or `$0.00`. A reported zero keeps its
+flag `true`. See [token components](#token-components).
 
 The tile degrades rather than fails: with no Prometheus the token fields stay at zero, and with no log store the error count stays at zero. Neither makes the request fail.
 
@@ -1301,7 +1314,7 @@ no database.
 ```json
 {
   "agents": [
-    {"agent": "a-3f9a2b", "agentName": "Reviewer", "inputTokens": 12000, "outputTokens": 4500, "cacheReadTokens": 180000, "cacheWriteTokens": 9000, "totalTokens": 205500, "invocations": 42, "failures": 2, "avgDurationMs": 31400}
+    {"agent": "a-3f9a2b", "agentName": "Reviewer", "inputTokens": 12000, "outputTokens": 4500, "cacheReadTokens": 180000, "cacheWriteTokens": 9000, "totalTokens": 205500, "invocations": 42, "failures": 2, "avgDurationMs": 31400, "cacheReported": true}
   ],
   "updatedAt": "2026-05-20T10:00:00Z",
   "source": "postgres"
@@ -1312,7 +1325,8 @@ no database.
 window, matching `GET /api/v1/invocations?agent=<name>` for the same window.
 `failures` counts `failure`/`timeout` statuses and `avgDurationMs` averages the
 completed invocations; both are populated on the records path only and read as
-zero under `source: "prometheus"`.
+zero under `source: "prometheus"`. `cacheReported` is the row's presence flag
+for the cache components (see [token components](#token-components)).
 
 ### GET /api/v1/observability/metrics/tokens/summary
 
@@ -1328,6 +1342,8 @@ zero under `source: "prometheus"`.
   "cacheWriteTokens": 6100,
   "totalTokens": 159700,
   "costUsd": 0.42,
+  "cacheReported": true,
+  "costReported": true,
   "previousTotalTokens": 9100,
   "updatedAt": "2026-05-20T10:00:00Z"
 }
@@ -1343,20 +1359,31 @@ under-reports real consumption by the whole cached volume, which in an agent loo
 usually the large majority of the prompt.
 
 `cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` is the cache hit
-rate. Providers without prompt caching publish no cache series, so those fields read as
-zero.
+rate. Presence is a separate fact: `cacheReported` is `true` only when the data in scope
+reported a cache figure at least once — either cache column counts, since the
+flag is one presence group for the read/write pair; a reported `0` is
+a measured zero hit rate and keeps the flag `true`. Providers without prompt caching report nothing, so their fields
+carry `cacheReported: false` and the summed zeros are placeholders: readers must render
+them as "not reported", never as a measured `0%`.
 
 `costUsd` is the priced counterpart: pi computes it per message from the model's cost
 block (`spec.llm.cost`, USD per million tokens for each of the four components), the
 runtime reports it on each conversation row and as `agent_cost_usd_total`, and the hub
 sums whichever source answers the query. Cache traffic is priced separately from input
 — at very different rates — so a cost derived from an input+output total alone would be
-wrong in both directions at once. Models without a cost block price everything at 0.
+wrong in both directions at once. A model without a cost block reports no figure at all:
+`costReported: false`, which is a different fact from a priced model whose runs happen
+to cost nothing (`costReported: true`, `costUsd: 0`).
 
 ### GET /api/v1/observability/metrics/tokens/timeseries
 
 24-hour token-usage sparkline stepped at 30-minute intervals. Points sum every
-token component, cache traffic included.
+token component, cache traffic included. Presence is reported on
+`tokens/summary` and the by-subject/by-event rows only: each point here is a
+single summed total with no cache or cost component to qualify, so the
+series carries no `cacheReported`/`costReported` flag — a bucket of
+unreported-cache traffic is indistinguishable from a bucket of genuine usage
+and is deliberately drawn as a real value.
 
 **Query parameters:** `range` — `24h` only (other values return `400`).
 
@@ -1386,7 +1413,7 @@ empty string.
 {
   "range": "24h",
   "rows": [
-    {"agent": "a-3f9a2b", "repo": "ainsel-project/ainsel", "eventType": "issue.opened", "model": "gpt-4", "inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31}
+    {"agent": "a-3f9a2b", "repo": "ainsel-project/ainsel", "eventType": "issue.opened", "model": "gpt-4", "inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31, "cacheReported": true, "costReported": true}
   ],
   "updatedAt": "2026-05-20T10:00:00Z",
   "source": "postgres"
@@ -1475,11 +1502,64 @@ Return agent conversation messages captured from agent turns and stored in the `
 }
 ```
 
-Each message has the fields `id` (number), `invocationId`, `correlationId`, `agentName`, `role` (`user` | `assistant` | `toolResult`), `content` (a JSON **string** — see encoding note below), `model`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`, `stopReason`, and `createdAt` (RFC3339). The token and cost fields are per-message pi usage figures (see [token components](#token-components)); rows written by runtimes that predate cache/cost reporting carry zeros.
+Each message has the fields `id` (number), `invocationId`, `correlationId`, `agentName`, `role` (`user` | `assistant` | `toolResult`), `content` (a JSON **string** — see encoding note below), `model`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`, `stopReason`, and `createdAt` (RFC3339). The token and cost fields are per-message pi usage figures (see [token components](#token-components)). `cacheReadTokens`, `cacheWriteTokens` and `costUsd` are **omitted from the response** when the runtime reported no figure — a provider without prompt caching, an unpriced model, or a row (like any `user` or `toolResult` row) that carries no usage at all — which is a different fact from a reported `0`. (These fields are nullable in the store but serialized with `omitempty`, so on the wire the not-reported marker is the *absence of the key*, never a `null` value; a present key always carries a measured number.) Rows written before migration 0025 stored ambiguous zeros; the migration backfills them to NULL in the store, so pre-migration rows read as not reported too.
 
 **`content` encoding:** `content` is always a JSON-encoded string. For `user` and `assistant` messages it decodes to an array of blocks: `{"type":"text","text"}`, `{"type":"thinking","text"}`, and `{"type":"toolCall","id","name","arguments"}`. For `toolResult` messages it decodes to a single object: `{"toolCallId","isError","content"}`.
 
 **Status codes:** `200`, `405` (wrong method), `502` (query failure), `503` (log backend not configured).
+
+---
+
+## Users
+
+The user registry backs authentication and authorization. Local users carry
+the ID `local:<username>`; OIDC users are persisted under their OIDC subject.
+
+### GET /api/v1/users
+
+List all registry users. Any authenticated user may call this.
+
+**Response:** `200 OK` — array of user objects:
+```json
+[
+  {"id": "local:alice", "email": "alice@example.com", "username": "alice", "isAdmin": false, "disabled": false, "createdAt": "2026-10-01T12:00:00Z", "updatedAt": "2026-10-19T12:00:00Z"}
+]
+```
+
+### POST /api/v1/users
+
+Create a locally-managed user (admin only).
+
+**Request:** `{"username": "alice", "password": "...", "email": "alice@example.com", "isAdmin": false}`
+
+**Status codes:** `201`, `400` on an invalid username/password, `409` if the user already exists.
+
+### GET /api/v1/users/{id}
+
+Fetch one user. **Status codes:** `200`, `404`.
+
+### PATCH /api/v1/users/{id}
+
+Partial update (admin only). Any subset of the fields below; omitted fields are
+untouched. Returns the updated user object (same shape as the list above).
+
+| Field | Meaning |
+|-------|---------|
+| `isAdmin` | Grant or revoke the admin role. Demoting the last admin is rejected. |
+| `password` | Admin password reset for users with local credentials. Invalidates that user's existing session JWTs (token versioning). |
+| `disabled` | Disable or re-enable the account without deleting it. Group memberships and user tokens are kept; while disabled, login, session JWTs, and user tokens all fail with `401`. See [access control](./access-control.md). |
+
+Guards when disabling: an admin cannot disable their own account, and the last
+admin cannot be disabled. Disabling does not force-teardown an open
+`/api/v1/ws` connection (see the caveat in
+[access control](./access-control.md)).
+
+**Status codes:** `200`, `400` on an invalid new password or malformed body, `403` for non-admin callers, `404` for an unknown user, `409` with `"cannot disable your own account"`, `"cannot disable the last admin"`, or `"cannot demote the last admin"`.
+
+### DELETE /api/v1/users/{id}
+
+Delete a registry user (admin only). Guards: no self-deletion; the last admin
+cannot be deleted. **Status codes:** `204`, `403`, `404`, `409`.
 
 ---
 
@@ -1495,19 +1575,23 @@ Per-`(agent, repository, issueNumber, model)` token consumption. The hub's own c
 ```json
 {
   "tokens": [
-    {"agent": "a-3f9a2b", "repository": "ainsel-project/ainsel", "issueNumber": "42", "model": "unsloth/gpt-oss-120b-GGUF:F16", "inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31}
+    {"agent": "a-3f9a2b", "repository": "ainsel-project/ainsel", "issueNumber": "42", "model": "unsloth/gpt-oss-120b-GGUF:F16", "inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31, "cacheReported": true, "costReported": true}
   ],
-  "total": {"inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31},
+  "total": {"inputTokens": 2400, "outputTokens": 900, "cacheReadTokens": 38000, "cacheWriteTokens": 1500, "totalTokens": 42800, "costUsd": 0.31, "cacheReported": true, "costReported": true},
   "source": "postgres"
 }
 ```
 
 `costUsd` is priced consumption — the conversation rows' `cost_usd` on the
-records path, the `agent_cost_usd_total` counter on the Prometheus path — and
-is 0 for agents whose models carry no `spec.llm.cost` block. Rows written
-before the subject columns existed carry an empty `issueNumber` (subject
-unknown); they are included, never dropped. Component semantics are described
-under [token components](#token-components).
+records path, the `agent_cost_usd_total` counter on the Prometheus path. The
+per-row `cacheReported`/`costReported` flags say whether any row in the group
+ever reported that figure (see [token components](#token-components)); when
+false, the summed numeric is a placeholder for "not reported" — for example an
+agent whose models carry no `spec.llm.cost` block — and must not be rendered
+as a measured `0` or `$0.00`. Rows written before the subject columns existed
+carry an empty `issueNumber` (subject unknown); they are included, never
+dropped. Component semantics are described under
+[token components](#token-components).
 
 **Status codes:** `200`, `400` on a non-integer `issueNumber` or a malformed `since`/`until`, `502` on a backend query failure, `503` when no metrics backend is configured (or when Prometheus is pinned but its URL is unset).
 
@@ -1565,7 +1649,7 @@ All non-WebSocket error responses return:
 
 ## Authentication
 
-The API supports two authentication methods. See
+The API supports the following authentication methods. See
 [Access Control](access-control.md) for the full authorization model
 (groups, roles, visibility rules).
 
@@ -1574,6 +1658,68 @@ The API supports two authentication methods. See
 Browser-based authentication via the configured OIDC provider. API requests carry a standard
 `Authorization: Bearer <jwt>` header. The OIDC middleware validates the
 token against the configured issuer and audience.
+
+### Local authentication
+
+Available when the hub runs with `HUB_AUTH_MODE=local` or `HUB_AUTH_MODE=oidc+local` (the
+break-glass path of a coexistence install; see
+[configuration.md](../services/hub/docs/configuration.md)). Local users authenticate with a
+username/password and receive a stateless session JWT (12h TTL) used as a `Bearer` token.
+Passwords are never stored in plain text and never appear in API responses. See
+[Access Control](access-control.md) for the local-user authorization model.
+
+#### POST /api/v1/auth/login
+
+Exchanges credentials for a session token. Rate-limited per IP and per username. Returns a
+generic `401` for any failure (unknown user, wrong password).
+
+**Request:**
+```json
+{"username": "alice", "password": "secret123"}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "token": "<jwt>",
+  "expiresAt": "2026-10-19T18:00:00Z",
+  "user": {"sub": "local:alice", "username": "alice", "isAdmin": false}
+}
+```
+
+#### POST /api/v1/auth/logout
+
+Stateless no-op (`204 No Content`) for API symmetry: the client discards its token. To actually
+revoke sessions, use `sign-out-all` or change the password.
+
+#### PUT /api/v1/auth/password
+
+Changes the caller's own password (local accounts only). Requires knowledge of the current password.
+
+**Request:**
+```json
+{"current": "secret123", "new": "newsecret456"}
+```
+
+**Response:** `200 OK` — `"status": "ok"`. A wrong `current` password yields `401` and does **not**
+invalidate existing sessions.
+
+#### POST /api/v1/auth/sign-out-all
+
+Bumps the caller's token version, immediately invalidating **every** local session JWT issued for
+that user — including the one making this call (`200 OK`). The next request with any old token gets
+`401`; re-login via `/auth/login` restores access.
+
+#### Session invalidation (token versioning)
+
+Each user carries a `token_version` counter embedded as a claim in every issued JWT. The auth
+middleware compares the claim against the stored value on every request; a mismatch means `401`.
+The counter is bumped automatically on any password change or admin reset
+(`PATCH /api/v1/users/{id}` with a `password` field) and explicitly by `sign-out-all`. A password
+change or reset therefore logs out **all** of that user's local sessions immediately — in
+`oidc+local` mode exactly as in `local` mode, so a coexistence install cannot opt out of
+revocation. OIDC tokens and user tokens (`/api/v1/user-tokens`, which have their own revocation)
+are unaffected.
 
 ### User tokens (programmatic)
 

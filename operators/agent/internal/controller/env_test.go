@@ -1017,3 +1017,107 @@ var _ = Describe("Agent Controller", func() {
 		})
 	})
 })
+
+// Issue #96: resolvePiProvider is the operator's single source of truth for
+// provider selection. It must resolve the four valid providers exactly, honour
+// per-provider baseUrl overrides, and refuse (never default) on an empty or
+// unknown spec.llm.provider.
+var _ = Describe("resolvePiProvider", func() {
+	newAgent := func(mut func(*ainselv1alpha1.Agent)) *ainselv1alpha1.Agent {
+		a := &ainselv1alpha1.Agent{}
+		a.Name = "provider-test"
+		a.Spec.LLM.Model = "glm-5.1:cloud"
+		mut(a)
+		return a
+	}
+
+	It("resolves ollama-cloud to its canonical name, URL and API-key env", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderOllamaCloud
+		})
+		pp, err := resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.Name).To(Equal("ollama-api-key"))
+		Expect(pp.BaseURL).To(Equal("https://ollama.com/v1"))
+		Expect(pp.APIKeyEnv).To(Equal("OLLAMA_API_KEY"))
+	})
+
+	It("resolves opencode to its canonical name, URL and API-key env", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderOpenCode
+		})
+		pp, err := resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.Name).To(Equal("opencode"))
+		Expect(pp.BaseURL).To(Equal("https://opencode.ai/zen/go/v1"))
+		Expect(pp.APIKeyEnv).To(Equal("OPENCODE_API_KEY"))
+	})
+
+	It("resolves alibaba-cloud to its canonical name, URL and API-key env", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderAlibabaCloud
+		})
+		pp, err := resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.Name).To(Equal("alibaba-cloud"))
+		Expect(pp.BaseURL).To(Equal("https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"))
+		Expect(pp.APIKeyEnv).To(Equal("ALIBABA_CLOUD_API_KEY"))
+	})
+
+	It("resolves custom to the openai key with the spec.customProvider.url", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderCustom
+			a.Spec.CustomProvider = &ainselv1alpha1.AgentCustomProvider{URL: "https://llm.internal.example/v1"}
+		})
+		pp, err := resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.Name).To(Equal("openai"))
+		Expect(pp.BaseURL).To(Equal("https://llm.internal.example/v1"))
+		Expect(pp.APIKeyEnv).To(Equal("CUSTOM_PROVIDER_API_KEY"))
+	})
+
+	It("lets a baseUrl override win over the built-in URL for each built-in provider", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderOllamaCloud
+			a.Spec.OllamaCloud = &ainselv1alpha1.AgentOllamaCloud{BaseURL: "https://ollama.internal.example/v1"}
+		})
+		pp, err := resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.BaseURL).To(Equal("https://ollama.internal.example/v1"))
+
+		agent = newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderOpenCode
+			a.Spec.OpenCode = &ainselv1alpha1.AgentOpenCode{BaseURL: "https://zen.internal.example/v1"}
+		})
+		pp, err = resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.BaseURL).To(Equal("https://zen.internal.example/v1"))
+
+		// The Alibaba case is the one the issue calls out: a different region.
+		agent = newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = ainselv1alpha1.AgentLLMProviderAlibabaCloud
+			a.Spec.AlibabaCloud = &ainselv1alpha1.AgentAlibabaCloud{BaseURL: "https://token-plan.eu-central-1.maas.aliyuncs.com/compatible-mode/v1"}
+		})
+		pp, err = resolvePiProvider(agent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pp.BaseURL).To(Equal("https://token-plan.eu-central-1.maas.aliyuncs.com/compatible-mode/v1"))
+	})
+
+	It("errors on an unset provider instead of defaulting to ollama-cloud", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {})
+		_, err := resolvePiProvider(agent)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("spec.llm.provider is required"))
+		Expect(err.Error()).To(ContainSubstring("ollama-cloud, opencode, alibaba-cloud, custom"))
+	})
+
+	It("errors on an unknown provider instead of defaulting to ollama-cloud", func() {
+		agent := newAgent(func(a *ainselv1alpha1.Agent) {
+			a.Spec.LLM.Provider = "ollama"
+		})
+		_, err := resolvePiProvider(agent)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unknown"))
+		Expect(err.Error()).To(ContainSubstring("ollama-cloud, opencode, alibaba-cloud, custom"))
+	})
+})

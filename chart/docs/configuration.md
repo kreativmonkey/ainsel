@@ -82,8 +82,6 @@ written `<component>.<key>`:
 | `agentOperator.image.repository` | string | `dpinsel/ainsel-k8s-ai-agent-operator` | Image repository |
 | `agentOperator.image.tag` | string | `"0.1.0"` | Image tag |
 | `agentOperator.image.pullPolicy` | string | `IfNotPresent` | Image pull policy |
-| `agentOperator.forgejoUrl` | string | `""` | Forgejo base URL passed to the operator as `FORGEJO_URL`; empty disables the Forgejo integration in the operator |
-| `agentOperator.forgejoTokenSecret` | object | `{}` | `{name, key}` of an existing Secret holding the Forgejo token, passed to the operator as `FORGEJO_TOKEN_SECRET_NAME` / `FORGEJO_TOKEN_SECRET_KEY`. Empty disables it |
 | `agentOperator.agentGracePeriod` | string | `0` (flag omitted) | Grace period for the terminating signal sent to agent pods, passed as `--agent-grace-period`. Parsed as a Go duration, so it needs a unit: `"30m"`, not `"1800"` |
 | `agentOperator.resources` | object | 50m/64Mi → 200m/256Mi | CPU/memory |
 
@@ -115,7 +113,8 @@ written `<component>.<key>`:
 | `hub.ingress.enabled` | bool | `true` | Enable ingress |
 | `hub.ingress.host` | string | `ainsel.example.com` | Ingress hostname |
 | `hub.ingress.path` | string | `/ainsel/api` | Ingress path prefix; only `<path>/v1/*` is published |
-| `hub.ingress.className` | string | `nginx` | Ingress class |
+| `hub.ingress.className` | string | `nginx` | Ingress class. `nginx` renders regex paths and nginx rewrite annotations; any other class renders a literal `<path>/v1` Prefix path (no nginx annotations) — configure controller-side rewrite middleware |
+| `hub.ingress.tlsSecretName` | string | `hub-tls` | Secret holding the TLS certificate for this host |
 | `hub.ingress.annotations` | object | `nginx.ingress.kubernetes.io/rewrite-target: /api/$2` | Ingress annotations |
 | `hub.platformExternalUrl` | string | `""` | Externally-reachable platform URL. When empty it is derived from the hub ingress host and `ui.basePath` (`https://<hub.ingress.host><basePath>`) |
 | `hub.connectorImages.webhook.repository` | string | `dpinsel/ainsel-webhook-receiver` | Webhook-receiver image repository. The hub copies repository/tag/digest into a new connector's `spec.image.*`; the event-gateway operator composes the container image from them |
@@ -154,7 +153,8 @@ via `hub.extraEnv` in your `values.yaml`.
 | `ui.ingress.enabled` | bool | `true` | Enable ingress |
 | `ui.ingress.host` | string | `ainsel.example.com` | Ingress hostname |
 | `ui.ingress.path` | string | `/ainsel(/|$)(.*)` | Ingress path (regex form used with the rewrite-target annotation) |
-| `ui.ingress.className` | string | `nginx` | Ingress class |
+| `ui.ingress.className` | string | `nginx` | Ingress class. Non-nginx classes render a literal Prefix path (trailing nginx capture groups stripped, no nginx annotations) |
+| `ui.ingress.tlsSecretName` | string | `ui-tls` | Secret holding the TLS certificate for this host |
 | `ui.ingress.annotations` | object | `nginx.ingress.kubernetes.io/rewrite-target: /$2` | Ingress annotations |
 | `ui.resources` | object | 10m/16Mi → 100m/64Mi | CPU/memory |
 
@@ -171,6 +171,7 @@ favor of an externally managed database by pointing the hub's `HUB_DB_URL`
 | `postgres.image.tag` | string | `"17-alpine"` | Image tag |
 | `postgres.image.pullPolicy` | string | `IfNotPresent` | Image pull policy |
 | `postgres.storage` | string | `5Gi` | PVC size for the StatefulSet |
+| `postgres.storageClassName` | string | `""` | StorageClass for the data volume. Empty uses the cluster default; an existing install keeps the class its StatefulSet was created with (volume claim templates are immutable). Argo CD and other renderers without cluster access cannot detect it: installs created before this value existed must set `local-path` |
 | `postgres.database` | string | `ainselhub` | Database name (used when the chart manages credentials) |
 | `postgres.username` | string | `ainselhub` | Role name (used when the chart manages credentials) |
 | `postgres.auth.existingSecret` | string | `""` | Name of an existing Secret to use instead of chart-generated credentials. When empty, the chart generates a random password and creates a Secret named `ainsel-hub-db`. The Secret must have keys `username`, `password`, `database`, and `dsn` (the full DSN consumed by the hub backend as `HUB_DB_URL`) |
@@ -182,7 +183,7 @@ The AInsel MCP server ([`services/mcp`](../../services/mcp/)), opt-in.
 
 | Value | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mcp.enabled` | bool | `false` | Enable the AInsel MCP server |
+| `mcp.enabled` | bool | `false` | Enable the AInsel MCP server; requires an OIDC issuer and audience/client ID, including in local and none auth modes |
 | `mcp.image.repository` | string | `dpinsel/ainsel-mcp` | Image repository |
 | `mcp.image.tag` | string | `0.1.0` | Image tag |
 | `mcp.image.pullPolicy` | string | `IfNotPresent` | Image pull policy |
@@ -192,7 +193,7 @@ The AInsel MCP server ([`services/mcp`](../../services/mcp/)), opt-in.
 | `mcp.ingress.enabled` | bool | `true` | Enable ingress (also renders the OAuth metadata well-known ingresses) |
 | `mcp.ingress.host` | string | `ainsel.example.com` | Ingress hostname |
 | `mcp.ingress.path` | string | `/ainsel/mcp` | Ingress path |
-| `mcp.ingress.className` | string | `nginx` | Ingress class |
+| `mcp.ingress.className` | string | `nginx` | Ingress class. Non-nginx classes render literal paths (no nginx rewrite annotations) — configure controller-side rewrite middleware |
 | `mcp.ingress.annotations` | object | `{}` | Ingress annotations |
 | `mcp.resources` | object | 50m/64Mi → 200m/128Mi | CPU/memory |
 
@@ -223,31 +224,20 @@ client registration is handled there.
 
 | Value | Type | Default | Description |
 |-------|------|---------|-------------|
-| `auth.mode` | string | `""` | Authentication mode: `oidc` (external OIDC provider — requires `oidcIssuer`/`oidcClientId`), `local` (hub-managed username/password accounts, admin bootstrapped from a chart Secret — see `auth.local`), `none` (no authentication; only safe port-forwarded or behind an edge auth proxy such as Authelia/Authentik/oauth2-proxy). Empty keeps the legacy behavior: OIDC when `oidcIssuer` is configured, otherwise the chart's local-mode detection auto-enables no-auth when nothing is exposed via ingress |
+| `auth.mode` | string | `""` | Authentication mode: `oidc` (external OIDC provider — requires `oidcIssuer`/`oidcClientId`), `local` (hub-managed username/password accounts, admin bootstrapped from a chart Secret — see `auth.local`), `oidc+local` (coexistence: the login page offers both SSO and a local username/password form — requires the full OIDC config **and** the `auth.local` secrets; the local admin is bootstrapped too, so delete it via the admin users API if you want SSO-only users), `none` (no authentication; only safe port-forwarded or behind an edge auth proxy such as Authelia/Authentik/oauth2-proxy). Empty keeps the legacy behavior: OIDC when `oidcIssuer` is configured, otherwise the chart's local-mode detection auto-enables no-auth when nothing is exposed via ingress. `oidc+local` is never derived — it must be requested explicitly |
 | `auth.oidcIssuer` | string | `""` | OIDC issuer URL |
 | `auth.oidcClientId` | string | `""` | OIDC client id |
 | `auth.oidcAudience` | string | `""` | Expected JWT audience; defaults to legacy project ID, then client ID |
 | `auth.oidcSigningAlgs` | string | `"RS256"` | Comma-separated JWT signing algorithm allowlist: RS256/384/512, PS256/384/512, ES256/384/512, EdDSA. Symmetric algorithms and `none` fail startup |
 | `auth.oidcScopes` | string | `""` | Space-separated scopes; standard default `openid profile email offline_access`, or explicit legacy project scope |
-| `auth.oidcRolesClaim` | string | `"urn:zitadel:iam:org:project:roles"` | JWT role/group claim: exact key first, then dotted nested path (e.g. `realm_access.roles`). Set `groups` for a top-level groups array. Informational; hub DB manages permissions |
+| `auth.oidcRolesClaim` | string | `""` | JWT role/group claim: exact key first, then dotted nested path (e.g. `realm_access.roles`). Empty reads the top-level `groups` claim, or `urn:zitadel:iam:org:project:roles` when `oidcProjectId` is set. Informational; hub DB manages permissions |
 | `auth.oidcProjectId` | string | `""` | Optional legacy Zitadel project audience/scope compatibility |
 | `auth.allowInsecureNoAuth` | bool | `false` | Run the hub backend **without** auth middleware (`HUB_ALLOW_INSECURE_NO_AUTH=true`). Only effective when `oidcIssuer` is empty. For local/air-gapped testing ONLY: every `/api/v1/*` endpoint becomes open to any caller. Never enable on a reachable host without an external auth proxy in front of the ingress. You normally do not need to set this by hand: when no ingress is enabled anywhere (hub/ui/mcp) and no OIDC issuer is set, the chart detects "local mode" and enables it automatically (see `values-quickstart.yaml`) |
 | `auth.internalValidateSecret` | string | `""` | Shared secret between hub-backend and the MCP service protecting the `/api/internal/user-tokens/validate` endpoint. When unset, user-token auth is disabled and OIDC remains the only MCP auth |
 | `auth.skillsMcpToken` | string | `""` | Bearer token for the read-only skill catalogue MCP (`/api/internal/skills/mcp`, in-cluster). Agents get it as a normal secret env entry on their AgentImage and reference it from `spec.mcpServers[].tokenFromEnv`. Deliberately separate from `internalValidateSecret`: that one is the cluster-wide internal credential and must not become a bearer token for a second endpoint. Unset leaves the catalogue endpoint answering 503 — opt-in per instance |
-| `auth.local.adminUser` | string | `admin` | Username of the bootstrapped admin account (created on first start, `mode: local`) |
+| `auth.local.adminUser` | string | `admin` | Username of the bootstrapped admin account (created on first start, `mode: local` and `mode: oidc+local`) |
 | `auth.local.adminPasswordSecret` | string | `""` | Existing Secret holding the admin password under key `password`. When empty, the chart generates one into Secret `ainsel-local-admin` (read it with `kubectl -n <ns> get secret ainsel-local-admin -o jsonpath='{.data.password}' \| base64 -d`) |
 | `auth.local.jwtSecretSecret` | string | `""` | Existing Secret holding the JWT signing key under key `secret`. When empty, the chart generates one into Secret `ainsel-local-jwt` |
-
-### Forgejo Integration
-
-Enables the bug-report button in the frontend. When unset, the report
-button's issue-creation call fails with "Forgejo is not configured" — leave
-empty to disable issue creation.
-
-| Value | Type | Default | Description |
-|-------|------|---------|-------------|
-| `forgejo.apiBase` | string | `""` | Forgejo API base URL |
-| `forgejo.repo` | string | `""` | Target repository for bug-report issues |
 
 ### Observability
 

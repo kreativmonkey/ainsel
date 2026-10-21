@@ -2,8 +2,9 @@
 
 Go module shared by every Go component in the platform. Provides:
 
-- The canonical `Event` struct and event-type strings.
-- Typed event-data payloads (`IssueData`, `PullRequestData`, `PushData`, …).
+- The canonical `Event` struct and event-type strings. Event `data` is raw
+  JSON (`RawJSON`) — payload shapes are documented in the event schema, not
+  modelled as Go types.
 - The `Filter` struct and `MatchFilters` evaluation engine used by the
   hub's trigger matching.
 - Naming helpers for ConfigMaps shared between the hub and the agent

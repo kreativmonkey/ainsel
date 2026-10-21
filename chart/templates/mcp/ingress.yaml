@@ -1,4 +1,6 @@
 {{- if and .Values.mcp.enabled .Values.mcp.ingress.enabled }}
+{{- $isNginx := eq (include "ainsel.isNginx" .Values.mcp.ingress.className) "true" -}}
+{{- $annotations := fromYaml (include "ainsel.ingressAnnotations" (dict "isNginx" $isNginx "nginxOnly" (dict "nginx.ingress.kubernetes.io/rewrite-target" "/mcp$2" "nginx.ingress.kubernetes.io/use-regex" "true") "extra" .Values.mcp.ingress.annotations)) -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,20 +9,22 @@ metadata:
   labels:
     app.kubernetes.io/name: ainsel-mcp
     app.kubernetes.io/component: mcp
+  {{- with $annotations }}
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /mcp$2
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    {{- with .Values.mcp.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.mcp.ingress.className }}
   rules:
     - host: {{ .Values.mcp.ingress.host }}
       http:
         paths:
-          - path: {{ .Values.mcp.ingress.path }}(/|$)(.*)
-            pathType: ImplementationSpecific
+          # nginx: regex path + rewrite-target maps <path> and everything
+          # below it to /mcp on the MCP service. Other controllers: literal
+          # Prefix path — configure rewrite middleware to map <path> to
+          # /mcp (see "Ingress controllers" in docs/deployment.md).
+          - path: {{ if $isNginx }}{{ .Values.mcp.ingress.path }}(/|$)(.*){{ else }}{{ .Values.mcp.ingress.path }}{{ end }}
+            pathType: {{ if $isNginx }}ImplementationSpecific{{ else }}Prefix{{ end }}
             backend:
               service:
                 name: ainsel-mcp

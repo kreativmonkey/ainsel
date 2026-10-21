@@ -86,6 +86,15 @@ spec:
                     - key
                     type: object
                     x-kubernetes-map-type: atomic
+                  baseUrl:
+                    description: |-
+                      BaseURL overrides the provider's API base URL written to the agent's
+                      generated models.json — e.g. a different Alibaba MaaS region than the
+                      built-in ap-southeast-1 endpoint, or a private compatible-mode
+                      endpoint. Unset means the built-in URL
+                      (https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1).
+                      The endpoint is never probed.
+                    type: string
                 type: object
               customProvider:
                 description: |-
@@ -272,6 +281,20 @@ spec:
                   model:
                     type: string
                   provider:
+                    description: |-
+                      Provider selects the LLM backend. It has no default on purpose: an
+                      unset or unknown provider fails the reconcile with a Ready=False
+                      condition (reason InvalidLLMProvider) instead of silently sending
+                      traffic and the API key to a third-party SaaS. The enum rejects any
+                      non-empty value outside the list at the API server; the empty value
+                      stays schema-valid for one release so stored Agents are not broken
+                      by a CRD upgrade, and is rejected by the operator.
+                    enum:
+                    - ollama-cloud
+                    - opencode
+                    - alibaba-cloud
+                    - custom
+                    - openai-codex
                     type: string
                   temperature:
                     type: number
@@ -363,6 +386,12 @@ spec:
                     - key
                     type: object
                     x-kubernetes-map-type: atomic
+                  baseUrl:
+                    description: |-
+                      BaseURL overrides the provider's API base URL written to the agent's
+                      generated models.json. Unset means the built-in URL
+                      (https://ollama.com/v1). The endpoint is never probed.
+                    type: string
                 type: object
               openCode:
                 description: |-
@@ -395,6 +424,12 @@ spec:
                     - key
                     type: object
                     x-kubernetes-map-type: atomic
+                  baseUrl:
+                    description: |-
+                      BaseURL overrides the provider's API base URL written to the agent's
+                      generated models.json. Unset means the built-in URL
+                      (https://opencode.ai/zen/go/v1). The endpoint is never probed.
+                    type: string
                 type: object
               pause:
                 description: |-

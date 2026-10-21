@@ -6,6 +6,7 @@ export type HubUser = {
   email: string
   username: string
   isAdmin: boolean
+  disabled: boolean
   createdAt: string
   updatedAt: string
 }
@@ -38,7 +39,7 @@ export function resetUserPassword(id: string, password: string) {
   })
 }
 
-export function updateUser(id: string, body: { isAdmin?: boolean }) {
+export function updateUser(id: string, body: { isAdmin?: boolean; disabled?: boolean }) {
   return request<HubUser>(`/users/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 }
 
@@ -67,7 +68,8 @@ export function isUnsyncedUser(user: { id: string; username: string; email: stri
 export function useUpdateUser() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { isAdmin?: boolean } }) => updateUser(id, body),
+    mutationFn: ({ id, body }: { id: string; body: { isAdmin?: boolean; disabled?: boolean } }) =>
+      updateUser(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 }

@@ -133,7 +133,10 @@ func TestAgentSecretKeyReference(t *testing.T) {
 		t.Fatal("external secret reference copied into managed secret")
 	}
 	plan := newPodPlan(agent, "agent-test", image)
-	env := buildAgentEnv(context.Background(), agent, "agent-test", image, plan)
+	env, err := buildAgentEnv(context.Background(), agent, "agent-test", image, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := findEnvVar(env, "GH_TOKEN")
 	if got == nil || got.ValueFrom == nil || got.ValueFrom.SecretKeyRef.Name != "github-token" || got.ValueFrom.SecretKeyRef.Key != "token" {
 		t.Fatalf("unexpected GH_TOKEN reference: %+v", got)

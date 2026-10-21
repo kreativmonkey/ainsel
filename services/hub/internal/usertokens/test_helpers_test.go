@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	pgcontainer "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/ainsel-project/ainsel/services/hub/internal/db"
@@ -11,6 +12,15 @@ import (
 )
 
 func newTestStore(t *testing.T) (*usertokens.Store, func()) {
+	t.Helper()
+	store, _, cleanup := newTestStoreWithPool(t)
+	return store, cleanup
+}
+
+// newTestStoreWithPool is newTestStore with direct pool access, for tests
+// that must mutate rows outside the usertokens API (e.g. toggling the
+// users.disabled flag).
+func newTestStoreWithPool(t *testing.T) (*usertokens.Store, *pgxpool.Pool, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -53,5 +63,5 @@ func newTestStore(t *testing.T) (*usertokens.Store, func()) {
 		pool.Close()
 		_ = c.Terminate(context.Background())
 	}
-	return usertokens.NewStore(pool), cleanup
+	return usertokens.NewStore(pool), pool, cleanup
 }

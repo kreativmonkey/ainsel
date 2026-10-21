@@ -111,8 +111,16 @@ export type TokensSummary = {
   cacheReadTokens?: number
   cacheWriteTokens?: number
   // Priced consumption (pi's usage.cost, priced via spec.llm.cost). Only
-  // non-zero once the agent's model carries a cost block (issue #281).
+  // meaningful when costReported is true (issue #75).
   costUsd?: number
+  // Presence flags (issue #75): false means the window never carried a
+  // reported cache/cost figure, so the corresponding numerics are
+  // placeholders — render them as "not reported", never as 0 / 0% / $0.00.
+  // A reported zero keeps its flag true, so a genuine 0% still renders as 0%.
+  // Missing on hubs older than the flags: treat as unknown and keep the
+  // legacy rendering rather than claiming "not reported".
+  cacheReported?: boolean
+  costReported?: boolean
 }
 
 export type TokensSubjectRow = {
@@ -127,6 +135,9 @@ export type TokensSubjectRow = {
   cacheWriteTokens?: number
   totalTokens: number
   costUsd?: number
+  // Per-row presence flags, same rule as TokensSummary's (issue #75).
+  cacheReported?: boolean
+  costReported?: boolean
 }
 
 export type TokensBySubject = {
@@ -147,6 +158,9 @@ export type TokenEventRow = {
   cacheWriteTokens?: number
   totalTokens: number
   costUsd?: number
+  // Per-row presence flags, same rule as TokensSummary's (issue #75).
+  cacheReported?: boolean
+  costReported?: boolean
 }
 
 export type TokensByEvent = {
@@ -222,6 +236,9 @@ export type TokensTotals = {
   cacheWriteTokens?: number
   totalTokens: number
   costUsd?: number
+  // Window-level presence flags, same rule as TokensSummary's (issue #75).
+  cacheReported?: boolean
+  costReported?: boolean
 }
 
 // One ledger row — the hub's TokenEntry struct
@@ -240,6 +257,9 @@ export type TokensLedgerEntry = {
   cacheWriteTokens?: number
   totalTokens: number
   costUsd?: number
+  // Per-row presence flags, same rule as TokensSummary's (issue #75).
+  cacheReported?: boolean
+  costReported?: boolean
 }
 
 type TokensLedgerEnvelope = {

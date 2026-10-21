@@ -143,7 +143,9 @@ func (s *Store) CountByLevelSince(ctx context.Context, level string, since time.
 	return count, nil
 }
 
-// InsertConversation persists a single conversation message.
+// InsertConversation persists a single conversation message. Nil cache/cost
+// fields are stored as NULL — the encoding that keeps "not reported" distinct
+// from a measured zero (issue #75); a non-nil zero is stored as 0.
 func (s *Store) InsertConversation(ctx context.Context, m *ConversationMessage) error {
 	return s.pool.QueryRow(ctx, `
 		INSERT INTO task_conversations
@@ -233,6 +235,10 @@ func (s *Store) PruneConversations(ctx context.Context, retention time.Duration)
 // them separately and usage.input excludes them: an invocation total built
 // from input+output alone is short by the whole cached volume, which is
 // usually the large majority of an agent loop's prompt.
+//
+// CacheReported/CostReported follow TokenSubjectUsageRow's rule (issue #75):
+// true when at least one row in the group carried a reported (non-NULL)
+// figure, so a summed zero backed by NULLs reads as "not reported".
 type InvocationTokenRow struct {
 	InvocationID     string
 	InputTokens      int
@@ -240,6 +246,8 @@ type InvocationTokenRow struct {
 	CacheReadTokens  int
 	CacheWriteTokens int
 	CostUSD          float64
+	CacheReported    bool
+	CostReported     bool
 }
 
 // TokensByInvocationSince returns token totals grouped by invocation_id for
@@ -248,7 +256,8 @@ type InvocationTokenRow struct {
 func (s *Store) TokensByInvocationSince(ctx context.Context, since time.Time) ([]InvocationTokenRow, error) {
 	query := `SELECT invocation_id, COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COALESCE(SUM(cost_usd), 0)
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(cache_read_tokens) + COUNT(cache_write_tokens) > 0, COUNT(cost_usd) > 0
 		FROM task_conversations
 		WHERE invocation_id != ''`
 	args := []any{}
@@ -271,7 +280,8 @@ func (s *Store) TokensByInvocationSince(ctx context.Context, since time.Time) ([
 	for rows.Next() {
 		var r InvocationTokenRow
 		if err := rows.Scan(&r.InvocationID, &r.InputTokens, &r.OutputTokens,
-			&r.CacheReadTokens, &r.CacheWriteTokens, &r.CostUSD); err != nil {
+			&r.CacheReadTokens, &r.CacheWriteTokens, &r.CostUSD,
+			&r.CacheReported, &r.CostReported); err != nil {
 			return nil, fmt.Errorf("tasklogs.TokensByInvocationSince scan: %w", err)
 		}
 		out = append(out, r)
@@ -283,12 +293,23 @@ func (s *Store) TokensByInvocationSince(ctx context.Context, since time.Time) ([
 // window. The components stay separate so callers can render the same split
 // the Prometheus-backed views do; callers that need a single figure sum all
 // four (see api.tokenTotal — the accounting rule lives there, not here).
+//
+// CacheReported/CostReported say whether the window held any row with a
+// *reported* (non-NULL) cache/cost figure (issue #75). A window whose rows
+// all left the column NULL — an un-caching provider, or pre-migration-0025
+// rows whose ambiguous zeros migration 0025 backfilled to NULL — reads
+// false, and readers must render the
+// summed figures as "not reported", never as a measured 0. A reported zero
+// counts as reported, so a provider that genuinely reports cached_tokens: 0
+// keeps its real 0.
 type TokenUsageRow struct {
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
 	CostUSD          float64
+	CacheReported    bool
+	CostReported     bool
 }
 
 // Total returns the sum of every component. Callers that display a single
@@ -305,7 +326,8 @@ func (r TokenUsageRow) Total() float64 {
 func (s *Store) TokenUsageSince(ctx context.Context, since, until time.Time) (TokenUsageRow, error) {
 	query := `SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COALESCE(SUM(cost_usd), 0)
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(cache_read_tokens) + COUNT(cache_write_tokens) > 0, COUNT(cost_usd) > 0
 		FROM task_conversations WHERE 1=1`
 	args := []any{}
 	argN := 1
@@ -323,6 +345,7 @@ func (s *Store) TokenUsageSince(ctx context.Context, since, until time.Time) (To
 	var row TokenUsageRow
 	if err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &row.CostUSD,
+		&row.CacheReported, &row.CostReported,
 	); err != nil {
 		return TokenUsageRow{}, fmt.Errorf("tasklogs.TokenUsageSince: %w", err)
 	}
@@ -332,12 +355,14 @@ func (s *Store) TokenUsageSince(ctx context.Context, since, until time.Time) (To
 // AgentTokenRow holds the four token components pi reports, summed over a
 // window for one agent. The accounting rule is the same as TokenUsageRow's:
 // callers that need a single figure sum all four (see api.tokenTotal).
+// CacheReported follows TokenUsageRow's rule (issue #75).
 type AgentTokenRow struct {
 	AgentName        string
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	CacheReported    bool
 }
 
 // AgentTokenUsageSince sums every token component per agent over
@@ -347,7 +372,8 @@ type AgentTokenRow struct {
 // token summary tile when both are read over the same window.
 func (s *Store) AgentTokenUsageSince(ctx context.Context, since, until time.Time) ([]AgentTokenRow, error) {
 	query := `SELECT agent_name, COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
+			COUNT(cache_read_tokens) + COUNT(cache_write_tokens) > 0
 		FROM task_conversations WHERE 1=1`
 	args := []any{}
 	argN := 1
@@ -374,7 +400,7 @@ func (s *Store) AgentTokenUsageSince(ctx context.Context, since, until time.Time
 	for rows.Next() {
 		var r AgentTokenRow
 		if err := rows.Scan(&r.AgentName, &r.InputTokens, &r.OutputTokens,
-			&r.CacheReadTokens, &r.CacheWriteTokens); err != nil {
+			&r.CacheReadTokens, &r.CacheWriteTokens, &r.CacheReported); err != nil {
 			return nil, fmt.Errorf("tasklogs.AgentTokenUsageSince scan: %w", err)
 		}
 		out = append(out, r)
@@ -398,7 +424,8 @@ func (s *Store) TokenUsageBySubject(ctx context.Context, since, until time.Time)
 	query := `SELECT agent_name, repo, event_type, model,
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COALESCE(SUM(cost_usd), 0)
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(cache_read_tokens) + COUNT(cache_write_tokens) > 0, COUNT(cost_usd) > 0
 		FROM task_conversations WHERE 1=1`
 	args := []any{}
 	argN := 1
@@ -428,7 +455,7 @@ func (s *Store) TokenUsageBySubject(ctx context.Context, since, until time.Time)
 		var r TokenSubjectUsageRow
 		if err := rows.Scan(&r.AgentName, &r.Repo, &r.EventType, &r.Model,
 			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
-			&r.CostUSD); err != nil {
+			&r.CostUSD, &r.CacheReported, &r.CostReported); err != nil {
 			return nil, fmt.Errorf("tasklogs.TokenUsageBySubject scan: %w", err)
 		}
 		out = append(out, r)
@@ -452,9 +479,13 @@ func (s *Store) TokenUsageBuckets(ctx context.Context, start, end time.Time, ste
 		return nil, fmt.Errorf("tasklogs.TokenUsageBuckets: step must be positive")
 	}
 	stepSecs := int64(step / time.Second)
+	// The cache columns are NULLable since migration 0025 (issue #75), and SQL
+	// arithmetic on a NULL yields NULL — without the COALESCEs a row with an
+	// unreported cache figure would drop out of its bucket's total entirely.
+	// NULL contributes 0 to the total, as everywhere else in this store.
 	query := `
 		SELECT to_timestamp(floor(extract(epoch from created_at) / $1) * $1) AS bucket,
-			COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0)
+			COALESCE(SUM(input_tokens + output_tokens + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0)), 0)
 		FROM task_conversations
 		WHERE created_at >= $2 AND created_at < $3
 		GROUP BY bucket
@@ -494,7 +525,8 @@ func (s *Store) TokenUsageByIssue(ctx context.Context, f TokenUsageByIssueFilter
 	query := `SELECT agent_name, repo, issue_number, model,
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
-			COALESCE(SUM(cost_usd), 0)
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(cache_read_tokens) + COUNT(cache_write_tokens) > 0, COUNT(cost_usd) > 0
 		FROM task_conversations WHERE 1=1`
 	args := []any{}
 	argN := 1
@@ -542,7 +574,7 @@ func (s *Store) TokenUsageByIssue(ctx context.Context, f TokenUsageByIssueFilter
 		var r TokenIssueUsageRow
 		if err := rows.Scan(&r.AgentName, &r.Repo, &r.IssueNumber, &r.Model,
 			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
-			&r.CostUSD); err != nil {
+			&r.CostUSD, &r.CacheReported, &r.CostReported); err != nil {
 			return nil, fmt.Errorf("tasklogs.TokenUsageByIssue scan: %w", err)
 		}
 		out = append(out, r)

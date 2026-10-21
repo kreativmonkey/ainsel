@@ -20,10 +20,13 @@ func roleCovers(have, need GroupRole) bool {
 
 // User is a hub-managed user record, synced lazily from OIDC JWT claims.
 type User struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Username  string    `json:"username"`
-	IsAdmin   bool      `json:"isAdmin"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"isAdmin"`
+	// Disabled cuts the user off from login and all API access without
+	// deleting the row: group memberships and user tokens survive.
+	Disabled  bool      `json:"disabled"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
