@@ -76,7 +76,7 @@ set --
 set -- --mode rpc --no-session
 # Review agents expose only the runner's scoped immutable repository reader.
 # Keep untrusted repository resources from becoming executable extensions or skills.
-if [ -n "${AINSEL_REVIEW_REPO:-}" ]; then
+if [ -n "${AINSEL_REVIEW_REPO:-}${AINSEL_REVIEW_REPOS:-}" ]; then
   set -- "$@" --no-builtin-tools --no-extensions --no-skills --no-prompt-templates
 fi
 [ -r "$PERSONA_PATH" ] && set -- "$@" --append-system-prompt "$PERSONA_PATH"
@@ -86,7 +86,7 @@ fi
 # loading them all before any session_start handler fires.
 for ext in /usr/local/share/pi-extensions/*/index.ts; do
   [ -r "$ext" ] || continue
-  if [ -n "${AINSEL_REVIEW_REPO:-}" ]; then
+  if [ -n "${AINSEL_REVIEW_REPO:-}${AINSEL_REVIEW_REPOS:-}" ]; then
     case "$ext" in */ainsel-mcp/*) continue ;; esac
   fi
   set -- "$@" --extension "$ext"

@@ -472,8 +472,16 @@ For public GitHub pull-request events, the runner fetches the patch from
 GitHub's fixed API host, limits it to 512 KiB, and includes it as untrusted
 review context. Set `AINSEL_REVIEW_REPO` (for example,
 `kreativmonkey/ainsel`) on the Agent to restrict which repository it will
-review. Findings appear in the AInsel task transcript; this runtime does not
-post GitHub review comments.
+review. In this single-repository mode, findings appear only in the AInsel
+task transcript.
+
+For a GitHub App that reviews public PRs on an exact `/review` comment, set
+`AINSEL_REVIEW_REPOS` to an explicit comma-separated repository allowlist and
+configure the App ID, slug, installation ID, and private key as described in
+[`pi/pi-extensions/ainsel-runner/README.md`](../pi/pi-extensions/ainsel-runner/README.md).
+In this mode the runner posts a `COMMENT` review after checking the requesting
+user's repository permission and confirming the PR head has not changed.
+Both settings may be used on the same Agent for separate event streams.
 
 ### Pi with a ChatGPT subscription
 
