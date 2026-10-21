@@ -45,7 +45,7 @@ export const agentSchema = z
     description: z.string().optional(),
     runtime: z.object({
       engine: z.enum(['pi', 'codex', 'claude']),
-      subscription: z.object({ claimName: z.string(), login: z.boolean() }).optional(),
+      subscription: z.object({ claimName: z.string(), createClaim: z.boolean().optional(), login: z.boolean() }).optional(),
     }).optional(),
     imageRef: z.object({ name: z.string().min(1, 'Image is required') }),
     llm: z.object({
@@ -78,7 +78,7 @@ export const agentSchema = z
   .superRefine((data, ctx) => {
     const subscriptionRequired = (data.runtime?.engine !== undefined && data.runtime.engine !== 'pi')
       || !!data.runtime?.subscription || data.llm.provider === 'openai-codex'
-    if (subscriptionRequired && !data.runtime?.subscription?.claimName.trim()) {
+    if (subscriptionRequired && !data.runtime?.subscription?.createClaim && !data.runtime?.subscription?.claimName.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime', 'subscription', 'claimName'], message: 'Credential PVC is required' })
     }
     if ((!data.runtime || data.runtime.engine === 'pi') && data.llm.provider === 'custom' && !data.customProviderUrl?.trim()) {

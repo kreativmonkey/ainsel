@@ -62,7 +62,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(len(pvc_rules), 1)
         self.assertEqual(pvc_rules[0]["apiGroups"], [""])
         self.assertEqual(pvc_rules[0]["resources"], ["persistentvolumeclaims"])
-        self.assertEqual(set(pvc_rules[0]["verbs"]), {"get", "list", "watch"})
+        self.assertEqual(set(pvc_rules[0]["verbs"]), {"get", "list", "watch", "create"})
 
     def test_frontend_runtime_config(self):
         source = (ROOT / "frontend/docker-entrypoint-runtime-config.sh").read_text()

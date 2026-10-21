@@ -521,10 +521,15 @@ spec:
                     properties:
                       claimName:
                         description: |-
-                          ClaimName references an existing PVC in the Agent namespace. Pi mounts it at
+                          ClaimName references a dedicated PVC in the Agent namespace. Pi mounts it at
                           /home/agent/.pi/agent; native CLIs mount it at /home/agent.
                         minLength: 1
                         type: string
+                      createClaim:
+                        description: |-
+                          CreateClaim provisions a retained 5Gi Filesystem ReadWriteOncePod PVC using
+                          the default StorageClass. Managed claims retain this Agent UID provenance.
+                        type: boolean
                       login:
                         description: Login drains task Jobs and opens an interactive
                           login pod instead.

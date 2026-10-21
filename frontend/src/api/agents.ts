@@ -15,7 +15,7 @@ export type AgentLLM = {
 }
 export type AgentRuntime = {
   engine: 'pi' | 'codex' | 'claude'
-  subscription?: { claimName: string; login: boolean }
+  subscription?: { claimName: string; createClaim?: boolean; login: boolean }
 }
 export type AgentPersona = { id: string }
 export type AgentImageRef = { name: string; displayName?: string }

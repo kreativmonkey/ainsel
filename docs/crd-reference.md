@@ -32,7 +32,8 @@ for its container image and tool catalog.
 | `description` | string | No | Agent description |
 | `imageRef.name` | string | Yes | Name of the `AgentImage` CR in the same namespace that provides the container image and tool catalog |
 | `runtime.engine` | string | No | Task runtime: `pi` (default), `codex`, or `claude`. Native engines require an image containing the official CLI and `/opt/ainsel/subscription/runner.mjs` |
-| `runtime.subscription.claimName` | string | Subscription providers | Existing dedicated `ReadWriteOncePod` PVC. Pi `openai-codex` mounts `/home/agent/.pi/agent`; native engines mount `/home/agent`. Retained independently of the Agent |
+| `runtime.subscription.createClaim` | bool | `false` | Create a retained 5Gi Filesystem `ReadWriteOncePod` PVC using the default StorageClass. Only reuse claims labeled with this Agent UID; no Agent owner reference |
+| `runtime.subscription.claimName` | string | Subscription providers | Dedicated `ReadWriteOncePod` PVC. Pi `openai-codex` mounts `/home/agent/.pi/agent`; native engines mount `/home/agent`. Retained independently of the Agent |
 | `runtime.subscription.login` | bool | No | Default false. Drain existing task Jobs, withhold new dispatch and create `login-<agent>-0` pod for direct end-user CLI sign-in. False removes the login pod before resuming tasks |
 | `runtime.imagePullPolicy` | string | No | Kubernetes image pull policy (`Always`, `Never`, `IfNotPresent`) |
 | `runtime.resources` | ResourceRequirements | No | CPU/memory requests and limits for the agent pod |
@@ -399,8 +400,17 @@ sign-in. AInsel does not extract, translate, read, or distribute CLI credentials
 Use one dedicated PVC per agent/account. Its `ReadWriteOncePod` access mode
 requires a CSI driver supporting RWOP (Kubernetes 1.29 or newer recommended);
 `ReadWriteOnce` does not prevent concurrent writers on the same node and is
-rejected. Provision and retain the PVC separately from the Agent, using your
-storage class's encryption and backup policies. The operator does not delete it.
+rejected. Set `runtime.subscription.createClaim: true` to let the operator create
+a 5Gi Filesystem claim using the cluster default StorageClass, or provision
+one separately. With `createClaim`, the hub generates `<agent-id>-home` if the
+API request omits `claimName`; direct Kubernetes manifests must supply the name.
+Managed claims carry the creating Agent UID in the
+`ainsel.dev/subscription-agent-uid` label and cannot be adopted by a replacement
+Agent, even when selected through existing-claim mode. Unlabeled manually
+provisioned claims remain supported. Claims have no Agent owner reference and remain after Agent deletion.
+Delete them manually only when the credentials are no longer needed. Use your
+storage class's encryption and backup policies. A default StorageClass and CSI
+driver supporting RWOP are required for automatic provisioning.
 
 ```yaml
 apiVersion: v1

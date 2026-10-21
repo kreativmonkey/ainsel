@@ -136,6 +136,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("agent %s: spec.persona.id is required", agent.Name)
 	}
 
+	if err := r.reconcileSubscriptionClaim(ctx, &agent); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.validateSubscription(ctx, &agent); err != nil {
 		return ctrl.Result{}, err
 	}

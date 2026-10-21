@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -16,7 +17,7 @@ import (
 	api "github.com/ainsel-project/ainsel/shared/api/api/v1alpha1"
 )
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
 
 // Initialize private CLI homes on a fresh PVC before starting either process.
@@ -34,6 +35,49 @@ func piSubscription(agent *api.Agent) bool {
 
 func nativeRuntime(agent *api.Agent) bool {
 	return agent.Spec.Runtime.Engine == "codex" || agent.Spec.Runtime.Engine == "claude"
+}
+
+const subscriptionAgentUIDLabel = "ainsel.dev/subscription-agent-uid"
+
+// No owner reference: deleting an Agent must retain its provider credentials.
+func (r *AgentReconciler) reconcileSubscriptionClaim(ctx context.Context, agent *api.Agent) error {
+	sub := agent.Spec.Runtime.Subscription
+	if sub == nil || !sub.CreateClaim || !subscriptionRuntime(agent) {
+		return nil
+	}
+	if sub.ClaimName == "" || agent.UID == "" {
+		return fmt.Errorf("managed subscription storage requires claimName and Agent UID")
+	}
+	key := types.NamespacedName{Namespace: agent.Namespace, Name: sub.ClaimName}
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, key, &pvc); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("getting subscription home PVC: %w", err)
+		}
+		pvc = corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace,
+				Labels: map[string]string{subscriptionAgentUIDLabel: string(agent.UID)}},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod},
+				VolumeMode:  ptr.To(corev1.PersistentVolumeFilesystem),
+				Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("5Gi"),
+				}},
+			},
+		}
+		if err := r.Create(ctx, &pvc); err != nil {
+			// A racing creator may have won; requeue until the cache sees it,
+			// then check its provenance before allowing any credential access.
+			return fmt.Errorf("creating subscription home PVC: %w", err)
+		}
+	}
+	if pvc.Labels[subscriptionAgentUIDLabel] != string(agent.UID) {
+		return fmt.Errorf("subscription home PVC %q was not created for this Agent UID", sub.ClaimName)
+	}
+	if pvc.DeletionTimestamp != nil {
+		return fmt.Errorf("subscription home PVC %q is being deleted", sub.ClaimName)
+	}
+	return nil
 }
 
 func (r *AgentReconciler) validateSubscription(ctx context.Context, agent *api.Agent) error {
@@ -59,6 +103,9 @@ func (r *AgentReconciler) validateSubscription(ctx context.Context, agent *api.A
 	var pvc corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: sub.ClaimName}, &pvc); err != nil {
 		return fmt.Errorf("subscription home PVC: %w", err)
+	}
+	if uid, managed := pvc.Labels[subscriptionAgentUIDLabel]; managed && uid != string(agent.UID) {
+		return fmt.Errorf("subscription home PVC %q was not created for this Agent UID", sub.ClaimName)
 	}
 	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
 		return fmt.Errorf("subscription home PVC must use Filesystem volume mode")
